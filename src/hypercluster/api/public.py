@@ -974,10 +974,29 @@ async def jobs_post_results(
 
 @public_route(tags=["scoring"])
 @router.get("/v1/leaderboard")
-async def leaderboard() -> dict[str, list[object]]:
-    """Aggregated composite scores (scaffold; domain logic lands in M6)."""
+async def leaderboard(
+    session: DbSession,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Aggregated composite scores ordered by mass desc (VAL-SCORE-018/029).
 
-    return {"items": []}
+    First-visit vacant DB returns HTTP 200 with empty ``items`` — never 5xx,
+    never NaN ranks, never a fabricated registry-only leaderboard.
+    """
+
+    from hypercluster.domain.aggregation import build_leaderboard
+    from hypercluster.settings import get_hyper_settings
+
+    items = await build_leaderboard(
+        session,
+        hyper=get_hyper_settings(),
+        limit=limit,
+    )
+    return {
+        "items": items,
+        "count": len(items),
+        "empty": len(items) == 0,
+    }
 
 
 @public_route(tags=["scoring"])
@@ -987,10 +1006,11 @@ async def scores_for_hotkey(
     session: DbSession,
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> dict[str, Any]:
-    """Per-hotkey score history with four factors visible (VAL-SCORE-001/026).
+    """Per-hotkey score history with four factors + role (VAL-SCORE-001/008/026).
 
     Even when composite is 0, each row still exposes correctness, efficiency,
-    fabric_gate, and tee_bonus for forensic debugging.
+    fabric_gate, and tee_bonus for forensic debugging. Rows bind hotkey+role
+    (demand|supply|joint). Absent hotkey → empty items (vacant-safe).
     """
 
     from hypercluster.domain.scoring import list_scores_for_hotkey, score_row_to_public
@@ -1003,6 +1023,27 @@ async def scores_for_hotkey(
     }
 
 
+@public_route(tags=["scoring"])
+@router.get("/v1/weight-preview")
+async def weight_preview(
+    session: DbSession,
+) -> dict[str, Any]:
+    """Pending/latest raw weight map (VAL-SCORE-009/010; architecture §4.3).
+
+    Vacant participation returns ``weights: {}`` — burn-safe, never NaN.
+    """
+
+    from hypercluster.domain.aggregation import compute_raw_weights
+    from hypercluster.settings import get_hyper_settings
+
+    weights = await compute_raw_weights(session, hyper=get_hyper_settings())
+    return {
+        "weights": weights,
+        "count": len(weights),
+        "empty": len(weights) == 0,
+    }
+
+
 __all__ = [
     "jobs_attempt_get",
     "jobs_cancel",
@@ -1012,6 +1053,7 @@ __all__ = [
     "jobs_post_results",
     "leaderboard",
     "scores_for_hotkey",
+    "weight_preview",
     "leases_get",
     "leases_list",
     "leases_terminate",

@@ -17,7 +17,7 @@ from hypercluster.settings import (
     get_hyper_settings,
     get_settings,
 )
-from hypercluster.weights import get_weights
+from hypercluster.weights import bind_weights_runtime, get_weights
 
 BackgroundTaskFactory = Callable[[FastAPI], Coroutine[Any, Any, None]]
 
@@ -108,6 +108,9 @@ def create_app(
         tasks = [_combined_loop]
     else:
         tasks = []
+
+    # Bind DB for process-level get_weights (aggregation window → raw map).
+    bind_weights_runtime(database, product)
 
     app = create_challenge_app(
         settings=app_settings,

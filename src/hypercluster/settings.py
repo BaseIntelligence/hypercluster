@@ -80,6 +80,10 @@ class HyperSettings(BaseSettings):
     weight_push_interval_s: float = Field(default=120.0, ge=1.0)
     score_window_attempts: int = Field(default=50, ge=1)
     efficiency_floor: float = Field(default=0.0, ge=0.0)
+    # Soft self-deal damping fraction in [0, 1] (VAL-SCORE-012 / VAL-SCORE-027).
+    # mass' = mass * (1 - damping) when a score row is flagged self_deal.
+    # Env: HYPER_SELF_DEAL_DAMPING. Default 0.5 halves collusion mass.
+    self_deal_damping: float = Field(default=0.5, ge=0.0, le=1.0)
     # Signed miner auth (marketplace write routes). Insecure HMAC mode is for
     # local/tests (matches peer's allow_insecure_signatures pattern); set false
     # in production so only substrate hotkey signatures verify.

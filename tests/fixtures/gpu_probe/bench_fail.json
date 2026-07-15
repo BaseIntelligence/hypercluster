@@ -1,0 +1,78 @@
+{
+  "claimed": {
+    "gpu_count": 1,
+    "gpu_model": "1V100.6V"
+  },
+  "description": "microbench non-zero exit / bad result \u2192 cuda_microbench fail",
+  "expected_failure_code": "cuda_microbench",
+  "expected_status": "failed",
+  "fixture_id": "bench_fail",
+  "occupied_uuids": [],
+  "prior_verified_uuids": null,
+  "require_docker_runtime": true,
+  "script": {
+    "cuda_microbench": {
+      "duration_ms": 5,
+      "error": "bench_failed",
+      "exit_code": 1,
+      "fail_connect": false,
+      "stderr": "CUDA error: no device",
+      "stdout": "{\"ok\": false, \"digest\": \"sha256:badbeef00000000000000000000000000000000000000000\", \"gflops\": 0.0, \"elapsed_ms\": 1}\n",
+      "timed_out": false
+    },
+    "docker_gpu_smi": {
+      "duration_ms": 5,
+      "error": null,
+      "exit_code": 0,
+      "fail_connect": false,
+      "stderr": "",
+      "stdout": "GPU 0: Tesla V100-SXM2-16GB (UUID: GPU-11111111-1111-1111-1111-111111111111)\n",
+      "timed_out": false
+    },
+    "docker_info": {
+      "duration_ms": 5,
+      "error": null,
+      "exit_code": 0,
+      "fail_connect": false,
+      "stderr": "",
+      "stdout": "{\"Runtimes\": {\"runc\": {}, \"nvidia\": {}}, \"Name\": \"fake-host\"}",
+      "timed_out": false
+    },
+    "echo_ping": {
+      "duration_ms": 5,
+      "error": null,
+      "exit_code": 0,
+      "fail_connect": false,
+      "stderr": "",
+      "stdout": "hyper-gpu-probe-ping",
+      "timed_out": false
+    },
+    "nvidia_smi_list": {
+      "duration_ms": 5,
+      "error": null,
+      "exit_code": 0,
+      "fail_connect": false,
+      "stderr": "",
+      "stdout": "GPU 0: Tesla V100-SXM2-16GB (UUID: GPU-11111111-1111-1111-1111-111111111111)\n",
+      "timed_out": false
+    },
+    "nvidia_smi_query": {
+      "duration_ms": 5,
+      "error": null,
+      "exit_code": 0,
+      "fail_connect": false,
+      "stderr": "",
+      "stdout": "Tesla V100-SXM2-16GB, GPU-11111111-1111-1111-1111-111111111111, 16160, 535.104.05, 300.0, 300.0, 0.0, 0.0, 0.0\n",
+      "timed_out": false
+    },
+    "ssh_connect": {
+      "duration_ms": 5,
+      "error": null,
+      "exit_code": 0,
+      "fail_connect": false,
+      "stderr": "",
+      "stdout": "ok",
+      "timed_out": false
+    }
+  }
+}

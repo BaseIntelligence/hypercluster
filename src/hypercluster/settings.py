@@ -144,14 +144,17 @@ class HyperSettings(BaseSettings):
     max_concurrent_world_size_budget: int = Field(default=64, ge=1)
     # How long a job may wait in placing without capacity (seconds).
     capacity_wait_timeout_s: float = Field(default=2.0, ge=0.0)
-    # M9 GPU probe knobs (VAL-GPU-015 / FakeSsh fence). Defaults keep CI FakeSsh-
-    # friendly when product routes land; production refuses silent fake.
+    # M9 GPU probe knobs (VAL-GPU-015 / FakeSsh fence). Production default is
+    # real + allow_fake_ssh=false (VAL-GPU-028 refuses silent fake).
     # Env: HYPER_REQUIRE_DOCKER_RUNTIME, HYPER_MAX_GPU_COUNT,
-    # HYPER_SSH_TRANSPORT, HYPER_ALLOW_FAKE_SSH, HYPER_GPU_PROBE_TIMEOUT_S.
+    # HYPER_SSH_TRANSPORT, HYPER_ALLOW_FAKE_SSH, HYPER_FAKE_SSH_SCRIPT,
+    # HYPER_FAKE_SSH_FIXTURE, HYPER_GPU_PROBE_TIMEOUT_S.
     require_docker_runtime: bool = True
     max_gpu_count: int = Field(default=14, ge=1)
     ssh_transport: str = Field(default="real")  # real|fake
     allow_fake_ssh: bool = False
+    fake_ssh_script: str | None = Field(default=None)  # path to fixture JSON
+    fake_ssh_fixture: str = Field(default="pass_all")  # named bank fixture
     gpu_probe_timeout_s: int = Field(default=180, ge=1)
 
     def _split_csv(self, raw: str) -> list[str]:

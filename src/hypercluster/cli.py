@@ -220,13 +220,21 @@ def sim_doctor_cmd(
         None,
         help="API port when --url omitted (default 3200)",
     ),
+    offline: bool = typer.Option(
+        False,
+        "--offline",
+        help="Skip identity gates; check inventory/launcher/tee fixtures only",
+    ),
 ) -> None:
-    """CI readiness: identity gates + sim backend stubs (VAL-SCAF-036)."""
+    """CI readiness: identity gates + inventory/launcher/tee fixtures (VAL-CLI-014)."""
 
     from hypercluster.sim.doctor import run_doctor
 
-    base = _resolve_base_url(url, host, port)
-    report = run_doctor(base)
+    if offline and url is None and host is None and port is None:
+        report = run_doctor(base_url=None, require_identity=False)
+    else:
+        base = _resolve_base_url(url, host, port)
+        report = run_doctor(base, require_identity=not offline)
     for line in report.summary_lines():
         typer.echo(line)
     raise typer.Exit(code=0 if report.ok else 1)
@@ -257,14 +265,24 @@ def sim_run_scenario_cmd(
 def sim_seed_cmd(
     node_count: int = typer.Option(4, "--node-count", help="Virtual node count"),
     gpus_per_node: int = typer.Option(2, "--gpus-per-node", help="GPUs per sim node"),
-    seed: int = typer.Option(0, "--seed", help="Deterministic inventory seed"),
+    seed: int | None = typer.Option(
+        None,
+        "--seed",
+        help="Deterministic inventory seed (default: HYPER_SIM_SEED or 0)",
+    ),
 ) -> None:
-    """Seed synthetic IB/NVLink multi-node inventory (VAL-FAB-019)."""
+    """Seed synthetic IB/NVLink multi-node inventory (VAL-CLI-013 / VAL-FAB-019).
+
+    Same ``--seed`` or ``HYPER_SIM_SEED`` always yields identical node IDs and
+    digests (deterministic fixtures; never random UUIDs).
+    """
 
     from hypercluster.sim.inventory import plan_readiness, seed_sim_inventory
+    from hypercluster.sim.seed import inventory_shape_digest, resolve_sim_seed
 
+    resolved = resolve_sim_seed(seed)
     inventory = seed_sim_inventory(
-        seed=seed,
+        seed=resolved,
         node_count=node_count,
         gpus_per_node=gpus_per_node,
     )
@@ -274,19 +292,23 @@ def sim_seed_cmd(
         nnodes=min(node_count, 2),
         nproc_per_node=gpus_per_node,
     )
+    shape = inventory_shape_digest(inventory)
     summary = {
         "nodes": len(inventory.nodes),
+        "node_ids": [n.node_id for n in inventory.nodes],
         "ib_edges": len(inventory.ib_edges),
         "nvlink_edges": len(inventory.nvlink_edges),
         "graph_digest": inventory.graph_digest,
-        "seed": seed,
+        "shape_digest": shape,
+        "seed": resolved,
         "plan_ready": readiness.ok,
         "plan_nnodes_used": readiness.nnodes_used,
         "report_digests": [n.fabric_report.report_digest for n in inventory.nodes],
     }
     typer.echo(json.dumps(summary, indent=2, sort_keys=True))
     typer.echo(
-        f"sim seed: nodes={len(inventory.nodes)} graph_digest={inventory.graph_digest} "
+        f"sim seed: seed={resolved} nodes={len(inventory.nodes)} "
+        f"graph_digest={inventory.graph_digest} shape_digest={shape} "
         f"plan_ready={readiness.ok}"
     )
     raise typer.Exit(code=0 if readiness.ok else 1)

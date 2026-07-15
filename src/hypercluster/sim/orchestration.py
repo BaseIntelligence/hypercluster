@@ -196,12 +196,36 @@ def run_fabric_bundle(
     return run_named_scenarios(FABRIC_SCENARIOS, base_url, **kwargs)
 
 
+def run_cross_happy_path_bundle(
+    base_url: str,
+    *,
+    timeout: float = 45.0,
+    shared_token: str | None = None,
+    **kwargs: Any,
+) -> ScenarioResult:
+    """VAL-CROSS-001..003/008/009/013 full chain under pure local sim.
+
+    Prefer this over composing suite pieces when the assertion needs threaded
+    marketplace→job→score IDs and egress cleanliness in one process.
+    """
+
+    from hypercluster.sim.cross_happy_path import run_cross_happy_path
+
+    _ = kwargs  # recipients for future suite options (master_url unused here)
+    return run_cross_happy_path(
+        base_url,
+        timeout=timeout,
+        shared_token=shared_token,
+    )
+
+
 __all__ = [
     "DEFAULT_SCENARIO_ORDER",
     "FABRIC_SCENARIOS",
     "HAPPY_PATH_SCENARIOS",
     "SuiteResult",
     "normalize_scenario_names",
+    "run_cross_happy_path_bundle",
     "run_fabric_bundle",
     "run_happy_path_bundle",
     "run_named_scenarios",

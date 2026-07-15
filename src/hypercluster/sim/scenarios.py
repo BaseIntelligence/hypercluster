@@ -7,6 +7,10 @@ Architecture §12.3 names: smoke, marketplace, nccl, tee-offline, weights.
   - tee-offline: positive/negative fixtures + bonus (VAL-CLI-018)
   - weights: multi-hotkey composites → push ack/idempotency (VAL-CLI-019)
 
+Cross-area happy path (marketplace→rent→job→score→weights) lives in
+:mod:`hypercluster.sim.cross_happy_path` and is invoked via
+:func:`run_cross_happy_path` / :func:`run_scenario` name ``cross-happy-path``.
+
 See hypercluster.sim.orchestration for the reusable multi-scenario suite runner.
 """
 
@@ -29,8 +33,12 @@ MARKETPLACE = "marketplace"
 NCCL = "nccl"
 TEE_OFFLINE = "tee-offline"
 WEIGHTS = "weights"
+CROSS_HAPPY_PATH = "cross-happy-path"
 
+# Architecture §12.3 names remain the five canonical suite scenarios.
 KNOWN_SCENARIOS = (SMOKE, MARKETPLACE, NCCL, TEE_OFFLINE, WEIGHTS)
+# Extended names accepted by run_scenario (cross e2e; not part of suite order).
+EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (CROSS_HAPPY_PATH,)
 
 # Deterministic local-sim hotkeys (not real ss58; HMAC insecure mode).
 _SCENARIO_PROVIDER_HK = "sim-mkt-provider-hotkey-aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1295,7 +1303,7 @@ def run_scenario(
     shared_token: str | None = None,
     master_url: str | None = None,
 ) -> ScenarioResult:
-    """Dispatch a named scenario (architecture §12.3)."""
+    """Dispatch a named scenario (architecture §12.3 + cross-happy-path)."""
 
     key = name.strip().lower()
     if key == SMOKE:
@@ -1317,16 +1325,29 @@ def run_scenario(
             shared_token=shared_token,
             master_url=master_url,
         )
+    if key in {CROSS_HAPPY_PATH, "cross_happy_path", "happy-path", "cross-happy"}:
+        from hypercluster.sim.cross_happy_path import run_cross_happy_path
+
+        return run_cross_happy_path(
+            base_url,
+            timeout=max(timeout, 45.0),
+            shared_token=shared_token,
+        )
     return ScenarioResult(
         name=key,
         ok=False,
         base_url=base_url.rstrip("/"),
-        message=f"unknown scenario {name!r}; known: {', '.join(KNOWN_SCENARIOS)}",
+        message=(
+            f"unknown scenario {name!r}; known: "
+            f"{', '.join(EXTENDED_SCENARIOS)}"
+        ),
         steps=["unknown scenario name"],
     )
 
 
 __all__ = [
+    "CROSS_HAPPY_PATH",
+    "EXTENDED_SCENARIOS",
     "KNOWN_SCENARIOS",
     "MARKETPLACE",
     "NCCL",

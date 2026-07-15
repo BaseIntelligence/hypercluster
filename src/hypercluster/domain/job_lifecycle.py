@@ -412,8 +412,30 @@ async def post_job_results(
     if job is None:
         raise JobError("job_not_found", "job not found", status_code=404)
 
-    # Owner or any authenticated worker can post in sim path (actor optional).
-    _ = actor_hotkey
+    # Auth continuity (VAL-CROSS-008): only submitter, lease renter, or the
+    # lease provider may post results. Foreign hotkeys get 403. Internal
+    # sim drain passes actor_hotkey=None and uses score_attempt_with_tee.
+    if actor_hotkey is not None:
+        actor = actor_hotkey.strip()
+        allowed = bool(actor) and actor == job.submitter_hotkey
+        if not allowed and job.lease_id:
+            from hypercluster.domain.leases import get_lease
+            from hypercluster.domain.providers import get_provider
+
+            lease = await get_lease(session, job.lease_id)
+            if lease is not None:
+                if lease.renter_hotkey == actor:
+                    allowed = True
+                else:
+                    provider = await get_provider(session, lease.provider_id)
+                    if provider is not None and provider.hotkey == actor:
+                        allowed = True
+        if not allowed:
+            raise JobError(
+                "forbidden",
+                "only submitter, renter, or provider may post results for this job",
+                status_code=403,
+            )
 
     envelope = {
         "attempt_no": attempt_no,

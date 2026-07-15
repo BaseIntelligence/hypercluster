@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from hypercluster.sim.cross_happy_path import (
+    EgressTrace,
+    capture_httpx_egress,
+    run_cross_happy_path,
+)
 from hypercluster.sim.doctor import BackendChecks, DoctorReport, check_sim_backends, run_doctor
 from hypercluster.sim.identity import IdentityReport, probe_identity_gates
 from hypercluster.sim.inventory import (
@@ -15,6 +20,7 @@ from hypercluster.sim.inventory import (
 from hypercluster.sim.orchestration import (
     DEFAULT_SCENARIO_ORDER,
     SuiteResult,
+    run_cross_happy_path_bundle,
     run_named_scenarios,
     run_scenario_suite,
 )
@@ -26,6 +32,7 @@ from hypercluster.sim.ports import (
     mission_port_band,
 )
 from hypercluster.sim.scenarios import (
+    CROSS_HAPPY_PATH,
     KNOWN_SCENARIOS,
     ScenarioResult,
     run_marketplace_scenario,
@@ -43,12 +50,14 @@ from hypercluster.sim.seed import (
 )
 
 __all__ = [
+    "CROSS_HAPPY_PATH",
     "DEFAULT_BAREMETAL_PORT",
     "DEFAULT_SCENARIO_ORDER",
     "DEFAULT_SIM_SEED",
     "KNOWN_SCENARIOS",
     "BackendChecks",
     "DoctorReport",
+    "EgressTrace",
     "IdentityReport",
     "MAX_MISSION_PORT",
     "MIN_MISSION_PORT",
@@ -59,6 +68,7 @@ __all__ = [
     "SimNode",
     "SuiteResult",
     "assert_mission_port",
+    "capture_httpx_egress",
     "check_sim_backends",
     "default_sim_inventory",
     "inventory_shape_digest",
@@ -66,6 +76,8 @@ __all__ = [
     "plan_readiness",
     "probe_identity_gates",
     "resolve_sim_seed",
+    "run_cross_happy_path",
+    "run_cross_happy_path_bundle",
     "run_doctor",
     "run_marketplace_scenario",
     "run_named_scenarios",

@@ -1,6 +1,6 @@
-"""SQLAlchemy models for marketplace identity (providers / nodes / offers).
+"""SQLAlchemy models for marketplace identity and rentals.
 
-Schema aligns with architecture.md §3.1 (providers, nodes, offers, nonces).
+Schema aligns with architecture.md §3.1 (providers, nodes, offers, leases, pods, nonces).
 """
 
 from __future__ import annotations
@@ -229,6 +229,139 @@ class Offer(Base):
         }
 
 
+class Lease(Base):
+    """Time-bounded rental of an offer (architecture §3.1 / §7.3).
+
+    Status lifecycle: requested → active → terminated | expired | failed.
+    Active rentals are protected from idle-only reclaim (VAL-MKT-020).
+    """
+
+    __tablename__ = "leases"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    offer_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("offers.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    renter_hotkey: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    provider_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("providers.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    # requested|active|expired|terminated|failed
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="requested", index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    price_per_hour: Mapped[float] = mapped_column(Float, nullable=False)
+    lifetime_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    termination_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "offer_id": self.offer_id,
+            "renter_hotkey": self.renter_hotkey,
+            "provider_id": self.provider_id,
+            "status": self.status,
+            "started_at": isoformat_utc(self.started_at),
+            "ends_at": isoformat_utc(self.ends_at),
+            "price_per_hour": float(self.price_per_hour),
+            "lifetime_hours": float(self.lifetime_hours),
+            "termination_reason": self.termination_reason,
+            "created_at": isoformat_utc(self.created_at),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+
+
+class Pod(Base):
+    """Runtime binding for a lease (single node or multi-node cluster).
+
+    Status lifecycle: provisioning → running → stopping → stopped | error.
+    Local sim promotes provisioning → running on rent (VAL-MKT-017).
+    """
+
+    __tablename__ = "pods"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    lease_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("leases.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        unique=True,
+    )
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="single")
+    # provisioning|running|stopping|stopped|error
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="provisioning")
+    node_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    image_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ssh_authorized_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    endpoints_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def node_ids(self) -> list[str]:
+        try:
+            raw = json.loads(self.node_ids_json)
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        return [str(x) for x in raw]
+
+    def endpoints(self) -> Any:
+        if not self.endpoints_json:
+            return None
+        try:
+            return json.loads(self.endpoints_json)
+        except (TypeError, ValueError):
+            return self.endpoints_json
+
+    def to_dict(self) -> dict[str, Any]:
+        auth: Any = None
+        if self.ssh_authorized_json:
+            try:
+                auth = json.loads(self.ssh_authorized_json)
+            except (TypeError, ValueError):
+                auth = self.ssh_authorized_json
+        return {
+            "id": self.id,
+            "lease_id": self.lease_id,
+            "mode": self.mode,
+            "status": self.status,
+            "node_ids": self.node_ids(),
+            "image_digest": self.image_digest,
+            "ssh_authorized": auth,
+            "endpoints": self.endpoints(),
+            "created_at": isoformat_utc(self.created_at),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+
+
 class RequestNonce(Base):
     """Replay protection for signed miner requests."""
 
@@ -248,8 +381,10 @@ class RequestNonce(Base):
 
 
 __all__ = [
+    "Lease",
     "Node",
     "Offer",
+    "Pod",
     "Provider",
     "RequestNonce",
     "isoformat_utc",

@@ -4,8 +4,7 @@ Identity routes (`/health`, `/ready`, `/version`) are installed by
 `create_challenge_app` and are not registered here. Internal routes under
 `/internal/*` are owned by the SDK factory and must never carry `@public_route`.
 
-Marketplace providers/nodes/offers (VAL-MKT-001..012, 025..029). Later features
-add leases/pods rent path on the same router.
+Marketplace providers/nodes/offers/leases/pods (VAL-MKT-001..021, 025..029, 031).
 """
 
 from __future__ import annotations
@@ -17,6 +16,17 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from hypercluster.api.auth import DbSession, RequireMiner
+from hypercluster.domain.leases import (
+    LeaseError,
+    get_lease,
+    get_pod,
+    get_pod_by_lease,
+    lease_to_public,
+    list_leases,
+    pod_to_public,
+    rent_offer,
+    terminate_lease,
+)
 from hypercluster.domain.nodes import (
     NodeError,
     get_node,
@@ -85,6 +95,17 @@ class OfferCreateRequest(BaseModel):
     gpu_count: int | None = Field(default=None, ge=1)
     location_hint: str | None = Field(default=None, max_length=128)
     metadata: dict[str, Any] | None = None
+
+
+class RentRequest(BaseModel):
+    """Renter rent body; lifetime ≤ offer max; optional max_price renter bound."""
+
+    lifetime_hours: float | None = Field(default=None, gt=0)
+    max_price: float | None = Field(default=None, gt=0)
+
+
+class TerminateLeaseRequest(BaseModel):
+    reason: str | None = Field(default="renter_cancel", max_length=256)
 
 
 def _header_hotkey(request: Request) -> str | None:
@@ -391,6 +412,126 @@ async def offers_withdraw(
     return offer_to_public(offer)
 
 
+@public_route(tags=["marketplace"])
+@router.post("/v1/offers/{offer_id}/rent", status_code=status.HTTP_200_OK)
+async def offers_rent(
+    offer_id: str,
+    identity: RequireMiner,
+    session: DbSession,
+    body: RentRequest | None = None,
+) -> dict[str, Any]:
+    """Rent listed offer → exclusive lease + pod (VAL-MKT-013/014/017/019)."""
+
+    req = body if body is not None else RentRequest()
+    try:
+        lease, pod = await rent_offer(
+            session,
+            renter_hotkey=identity.hotkey,
+            offer_id=offer_id,
+            lifetime_hours=req.lifetime_hours,
+            max_price=req.max_price,
+            sim_ready=True,
+        )
+    except LeaseError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return {
+        "lease": lease_to_public(lease),
+        "pod": pod_to_public(pod),
+    }
+
+
+@public_route(tags=["marketplace"])
+@router.get("/v1/leases")
+async def leases_list(
+    session: DbSession,
+    request: Request,
+    offer_id: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+) -> dict[str, Any]:
+    """List leases for renter and/or provider hotkey (VAL-MKT-016).
+
+    Scoped by optional X-Hotkey (no signature required for list view policy).
+    Without X-Hotkey returns empty items (fail-closed identity scope).
+    """
+
+    hotkey = _header_hotkey(request)
+    items = await list_leases(
+        session,
+        hotkey=hotkey,
+        offer_id=offer_id,
+        status=status_filter,
+    )
+    return {"items": [lease_to_public(x) for x in items]}
+
+
+@public_route(tags=["marketplace"])
+@router.get("/v1/leases/{lease_id}")
+async def leases_get(
+    lease_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Lease detail (status, offer_id, price, times) — VAL-MKT-016."""
+
+    lease = await get_lease(session, lease_id)
+    if lease is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "lease_not_found", "message": "lease not found"},
+        )
+    return lease_to_public(lease)
+
+
+@public_route(tags=["marketplace"])
+@router.post("/v1/leases/{lease_id}/terminate", status_code=status.HTTP_200_OK)
+async def leases_terminate(
+    lease_id: str,
+    identity: RequireMiner,
+    session: DbSession,
+    body: TerminateLeaseRequest | None = None,
+) -> dict[str, Any]:
+    """Renter/provider terminate lease; pod stops; capacity free (VAL-MKT-015/021)."""
+
+    req = body if body is not None else TerminateLeaseRequest()
+    try:
+        lease = await terminate_lease(
+            session,
+            hotkey=identity.hotkey,
+            lease_id=lease_id,
+            reason=req.reason,
+            allow_provider=True,
+        )
+        pod = await get_pod_by_lease(session, lease.id)
+    except LeaseError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    payload: dict[str, Any] = {"lease": lease_to_public(lease)}
+    if pod is not None:
+        payload["pod"] = pod_to_public(pod)
+    return payload
+
+
+@public_route(tags=["marketplace"])
+@router.get("/v1/pods/{pod_id}")
+async def pods_get(
+    pod_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Pod detail with node binding and endpoints (VAL-MKT-017/019)."""
+
+    pod = await get_pod(session, pod_id)
+    if pod is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "pod_not_found", "message": "pod not found"},
+        )
+    return pod_to_public(pod)
+
+
 @public_route(tags=["jobs"])
 @router.get("/v1/jobs")
 async def list_jobs() -> dict[str, list[object]]:
@@ -409,6 +550,9 @@ async def leaderboard() -> dict[str, list[object]]:
 
 __all__ = [
     "leaderboard",
+    "leases_get",
+    "leases_list",
+    "leases_terminate",
     "list_jobs",
     "nodes_get",
     "nodes_heartbeat",
@@ -417,7 +561,9 @@ __all__ = [
     "offers_create",
     "offers_get",
     "offers_list",
+    "offers_rent",
     "offers_withdraw",
+    "pods_get",
     "providers_heartbeat",
     "providers_list",
     "providers_me",

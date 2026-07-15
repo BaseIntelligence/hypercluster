@@ -265,6 +265,24 @@ async def create_offer(
     return offer
 
 
+async def _offer_has_active_lease(session: AsyncSession, offer_id: str) -> bool:
+    """True when a non-terminal lease still occupies this offer (VAL-MKT-031)."""
+
+    # Local import avoids circular import at module load (leases → offers).
+    from hypercluster.db.models import Lease
+    from hypercluster.domain.leases import ACTIVE_LEASE_STATUSES
+
+    result = await session.execute(
+        select(Lease.id)
+        .where(
+            Lease.offer_id == offer_id,
+            Lease.status.in_(tuple(ACTIVE_LEASE_STATUSES)),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def withdraw_offer(
     session: AsyncSession,
     *,
@@ -273,8 +291,8 @@ async def withdraw_offer(
 ) -> Offer:
     """Provider withdraw: listed → withdrawn (VAL-MKT-012).
 
-    Active leased offers are fail-closed (VAL-MKT-031 for later rent slice;
-    guard lives here so withdraw never severs an active rental row).
+    Active leased offers are fail-closed while a non-terminal lease exists
+    (VAL-MKT-031). Withdraw never severs an active rental/pod.
     """
 
     provider = await get_provider_by_hotkey(session, hotkey)
@@ -295,7 +313,10 @@ async def withdraw_offer(
             "offer belongs to another provider",
             status_code=403,
         )
-    if offer.status in ACTIVE_LEASE_BLOCK_STATUSES:
+    # Fail closed while any non-terminal lease is still attached (VAL-MKT-031).
+    # Status==leased alone is not enough: after terminal, active-lease rows are
+    # gone and withdraw/re-list-of-capacity may proceed per policy.
+    if await _offer_has_active_lease(session, offer.id):
         raise OfferError(
             "offer_active_lease",
             "cannot withdraw an offer with an active lease",

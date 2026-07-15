@@ -764,11 +764,14 @@ def _run_cmd(
 
 
 def _cmd_public(res: SshCommandResult) -> dict[str, Any]:
+    # Redact + hard-cap before evidence storage (VAL-GPU-031).
+    from hypercluster.probe.redact import sanitize_output
+
     return {
         "command_id": res.command_id,
         "exit_code": res.exit_code,
-        "stdout": (res.stdout or "")[:4096],
-        "stderr": (res.stderr or "")[:2048],
+        "stdout": sanitize_output(res.stdout, max_bytes=4096),
+        "stderr": sanitize_output(res.stderr, max_bytes=2048),
         "duration_ms": res.duration_ms,
         "timed_out": res.timed_out,
         "error": res.error,

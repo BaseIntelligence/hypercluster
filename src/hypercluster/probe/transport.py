@@ -1,8 +1,9 @@
 """SSH transport protocol + FakeSsh (no real network).
 
-Real allowlist executor lands in ``m9-ssh-allowlist-executor``. This module
-defines the transport protocol the ordered check pipeline depends on, plus a
-deterministic FakeSsh used by unit tests and (later) the fixture bank.
+Real allowlist executor lives in ``hypercluster.probe.ssh_exec`` /
+``allowlist`` (``m9-ssh-allowlist-executor``). This module defines the
+transport protocol the ordered check pipeline depends on, plus a
+deterministic FakeSsh used by unit tests and the fixture bank.
 """
 
 from __future__ import annotations

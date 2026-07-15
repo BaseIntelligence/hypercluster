@@ -148,7 +148,9 @@ class HyperSettings(BaseSettings):
     # real + allow_fake_ssh=false (VAL-GPU-028 refuses silent fake).
     # Env: HYPER_REQUIRE_DOCKER_RUNTIME, HYPER_MAX_GPU_COUNT,
     # HYPER_SSH_TRANSPORT, HYPER_ALLOW_FAKE_SSH, HYPER_FAKE_SSH_SCRIPT,
-    # HYPER_FAKE_SSH_FIXTURE, HYPER_GPU_PROBE_TIMEOUT_S.
+    # HYPER_FAKE_SSH_FIXTURE, HYPER_GPU_PROBE_TIMEOUT_S,
+    # HYPER_SSH_KEY_PATH, HYPER_SSH_CONNECT_TIMEOUT_S, HYPER_SSH_CMD_TIMEOUT_S,
+    # HYPER_SSH_OUTPUT_CAP_BYTES.
     require_docker_runtime: bool = True
     max_gpu_count: int = Field(default=14, ge=1)
     ssh_transport: str = Field(default="real")  # real|fake
@@ -156,6 +158,13 @@ class HyperSettings(BaseSettings):
     fake_ssh_script: str | None = Field(default=None)  # path to fixture JSON
     fake_ssh_fixture: str = Field(default="pass_all")  # named bank fixture
     gpu_probe_timeout_s: int = Field(default=180, ge=1)
+    # Real allowlist executor (m9-ssh-allowlist-executor). File mode 0600 preferred.
+    ssh_key_path: str | None = Field(default=None)  # HYPER_SSH_KEY_PATH
+    ssh_key_env: str | None = Field(default=None)  # env var *name* holding path/PEM
+    ssh_connect_timeout_s: float = Field(default=15.0, ge=1.0)
+    ssh_cmd_timeout_s: float = Field(default=90.0, ge=1.0)
+    ssh_output_cap_bytes: int = Field(default=65536, ge=1024)
+    ssh_username: str = Field(default="root")
 
     def _split_csv(self, raw: str) -> list[str]:
         return [part.strip() for part in (raw or "").split(",") if part.strip()]

@@ -51,6 +51,7 @@ pythonpath = ["src"]
 markers = [
   "live_verda: external Verda/single-GPU ops QA (opt-in; never default CI)",
   "tee_live: optional live TEE hardware path (skip unless HYPER_TEE_LIVE)",
+  "integration: optional live/integration path (never default CI; real SSH opt-in)",
 ]
 filterwarnings = [
   "ignore::DeprecationWarning",

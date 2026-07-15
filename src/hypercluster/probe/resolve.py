@@ -2,8 +2,8 @@
 
 VAL-GPU-028: production settings must not silently fake silicon.
 ``HYPER_SSH_TRANSPORT=fake`` requires ``HYPER_ALLOW_FAKE_SSH=true`` (tests/CI
-only). Real transport is opt-in to a later allowlist executor feature; until
-then ``real`` also fails closed rather than falling back to FakeSsh.
+only). Real allowlist executor is opt-in via ``real`` + key_ref/path; never
+silent-fakes when real is requested but unconfigured.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from hypercluster.probe.fixtures import (
     load_fixture_json,
     load_named_fixture,
 )
+from hypercluster.probe.keys import KeyMaterialError, KeyRef
 from hypercluster.probe.transport import FakeSshTransport, SshTransport
 from hypercluster.settings import HyperSettings, get_hyper_settings
 
@@ -42,13 +43,18 @@ def resolve_ssh_transport(
     fixture_path: str | Path | None = None,
     scripted: dict[str, Any] | None = None,
     real_transport: SshTransport | None = None,
+    host: str | None = None,
+    port: int = 22,
+    username: str | None = None,
+    key_ref: KeyRef | None = None,
 ) -> SshTransport:
     """Resolve FakeSsh or RealSsh according to HYPER_* policy.
 
     * ``ssh_transport=fake`` only when ``allow_fake_ssh`` is true.
-    * ``ssh_transport=real`` uses ``real_transport`` when injected (unit
-      tests / future executor); otherwise fails closed with
-      ``ssh_transport_unavailable`` — **never** silent-fake.
+    * ``ssh_transport=real`` uses ``real_transport`` when injected; else builds
+      :class:`~hypercluster.probe.ssh_exec.RealSshExecutor` when host + key are
+      provided; otherwise fails closed with ``ssh_transport_unavailable`` —
+      **never** silent-fake.
     """
 
     cfg = settings if settings is not None else get_hyper_settings()
@@ -73,9 +79,26 @@ def resolve_ssh_transport(
     if kind in {"real", "ssh", "allowlist"}:
         if real_transport is not None:
             return real_transport
+        if host:
+            try:
+                from hypercluster.probe.ssh_exec import build_real_ssh_transport
+
+                return build_real_ssh_transport(
+                    cfg,
+                    host=host,
+                    port=port,
+                    username=username or cfg.ssh_username or "root",
+                    key_ref=key_ref,
+                )
+            except KeyMaterialError as exc:
+                raise TransportConfigError(
+                    SSH_TRANSPORT_UNAVAILABLE,
+                    f"real SSH key unavailable: {exc.message}",
+                    status_code=503,
+                ) from exc
         raise TransportConfigError(
             SSH_TRANSPORT_UNAVAILABLE,
-            "real SSH transport is not configured (no key/executor); refuse silent FakeSsh",
+            "real SSH transport is not configured (no host/key/executor); refuse silent FakeSsh",
             status_code=503,
         )
 

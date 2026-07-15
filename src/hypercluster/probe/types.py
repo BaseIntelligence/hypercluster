@@ -163,17 +163,14 @@ class GpuHostEvidence(BaseModel):
 
     def to_public(self) -> dict[str, Any]:
         data = self.model_dump(mode="json")
-        # Never expose possible private-key-shaped keys if callers stuffed them
-        # into raw_redacted by mistake.
+        # Never expose private-key-shaped keys / PEM values (VAL-GPU-031).
+        from hypercluster.probe.redact import redact_mapping
+
         raw = data.get("raw_redacted") or {}
         if isinstance(raw, dict):
-            redacted = {
-                k: v
-                for k, v in raw.items()
-                if "private" not in k.lower() and "pem" not in k.lower()
-            }
-            data["raw_redacted"] = redacted
-        return data
+            data["raw_redacted"] = redact_mapping(raw)
+        # Belt-and-suspenders: never allow PEM strings on any evidence field.
+        return redact_mapping(data)
 
 
 __all__ = [

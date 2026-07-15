@@ -83,6 +83,20 @@ class HyperSettings(BaseSettings):
     # combined worker applies run sleep so cancel/timeout races are testable.
     sim_job_step_delay_s: float = Field(default=0.0, ge=0.0)
     sim_job_run_sleep_s: float = Field(default=0.0, ge=0.0)
+    # Capacity binding + queue scaling (VAL-JOB-013..019, 022..024).
+    # When True (default), sim invents a synthetic lease/pod bind so lifecycle
+    # smoke works without a marketplace rental. When False, jobs without an
+    # explicit valid lease/pod stay placing until capacity or capacity fail.
+    sim_auto_capacity: bool = True
+    # Forced launch failure for integrity tests (VAL-JOB-018).
+    sim_launch_fail: bool = False
+    # Concurrent multi-node / large-job budget (VAL-JOB-015).
+    max_concurrent_large_jobs: int = Field(default=4, ge=1)
+    large_job_world_size_threshold: int = Field(default=4, ge=1)
+    # Aggregate world_size across concurrently running jobs.
+    max_concurrent_world_size_budget: int = Field(default=64, ge=1)
+    # How long a job may wait in placing without capacity (seconds).
+    capacity_wait_timeout_s: float = Field(default=2.0, ge=0.0)
 
 
 @lru_cache(maxsize=1)

@@ -57,7 +57,12 @@ async def _drain_job_lifecycle(app: FastAPI) -> None:
         run_sleep = float(getattr(hyper, "sim_job_run_sleep_s", 0.0) or 0.0)
     try:
         async with database.session() as session:
-            await drain_jobs_once(session, run_sleep_s=run_sleep, limit=16)
+            await drain_jobs_once(
+                session,
+                run_sleep_s=run_sleep,
+                limit=16,
+                hyper=hyper,
+            )
     except Exception:  # noqa: BLE001 — never crash the worker loop
         import logging
 

@@ -549,15 +549,12 @@ def attempt_to_public(attempt: JobAttempt) -> dict[str, Any]:
 
 
 async def list_drainable_jobs(session: AsyncSession, *, limit: int = 32) -> list[Job]:
-    """Jobs that still need lifecycle advancement."""
+    """Jobs that still need lifecycle advancement (micro-first fair order)."""
 
-    result = await session.execute(
-        select(Job)
-        .where(Job.status.in_(tuple(NON_TERMINAL_STATUSES)))
-        .order_by(Job.created_at.asc())
-        .limit(limit)
-    )
-    return list(result.scalars().all())
+    # Fair queue: prefer small world_size so micros are not starved (VAL-JOB-022).
+    from hypercluster.domain.job_queue import list_drainable_jobs_fair
+
+    return await list_drainable_jobs_fair(session, limit=limit)
 
 
 async def _place_job(session: AsyncSession, job: Job) -> None:
@@ -772,17 +769,53 @@ async def mark_timeout(session: AsyncSession, job: Job) -> Job:
     return job
 
 
+async def mark_failed(
+    session: AsyncSession,
+    job: Job,
+    *,
+    failure_code: str,
+) -> Job:
+    """Mark job (and open attempt) failed with a failure_code (VAL-JOB-018)."""
+
+    now = utc_now()
+    job.status = JOB_STATUS_FAILED
+    job.failure_code = failure_code
+    job.finished_at = now
+    job.updated_at = now
+    attempt = await get_latest_attempt(session, job.id)
+    if attempt is not None and not is_terminal(attempt.status):
+        attempt.status = JOB_STATUS_FAILED
+        attempt.failure_code = failure_code
+        attempt.finished_at = now
+    await session.commit()
+    await session.refresh(job)
+    return job
+
+
 async def advance_job_one_step(
     session: AsyncSession,
     job: Job,
     *,
     run_sleep_s: float = 0.0,
+    hyper: Any | None = None,
+    worker_id: str | None = None,
 ) -> Job:
-    """Advance a single job one lifecycle step (or timeout/cancel noop).
+    """Advance a single job one lifecycle step (or timeout/cancel/capacity).
 
-    Callers must re-load job after wait where needed; cancellation mid-sleep
-    is checked after sleep via status re-read.
+    CAS status transitions guarantee only one worker places/launches a job
+    at a time (VAL-JOB-016). Capacity bind + concurrency budget for
+    VAL-JOB-013..015.
     """
+
+    from hypercluster.domain.job_queue import (
+        FAILURE_LAUNCH,
+        apply_bind,
+        can_admit_to_running,
+        cas_status_transition,
+        try_bind_capacity,
+    )
+
+    _ = worker_id  # reserved for future multi-worker claim telemetry
 
     await session.refresh(job)
     if is_terminal(job.status):
@@ -793,27 +826,100 @@ async def advance_job_one_step(
 
     current = job.status
     if current == "submitted":
-        current = JOB_STATUS_ADMITTED
-        job.status = current
-        job.updated_at = utc_now()
-        await session.commit()
+        won = await cas_status_transition(
+            session,
+            job_id=job.id,
+            from_statuses={"submitted"},
+            to_status=JOB_STATUS_ADMITTED,
+        )
+        if won:
+            await session.commit()
         await session.refresh(job)
+
+    # Capacity bind gate while admitted/placing (VAL-JOB-013/014).
+    if job.status in {JOB_STATUS_ADMITTED, JOB_STATUS_PLACING}:
+        bind = await try_bind_capacity(session, job, hyper=hyper)
+        if bind.failure_code:
+            return await mark_failed(session, job, failure_code=bind.failure_code)
+        if bind.wait:
+            # Stay in placing so health/poll observe non-succeeded wait.
+            if job.status == JOB_STATUS_ADMITTED:
+                won = await cas_status_transition(
+                    session,
+                    job_id=job.id,
+                    from_statuses={JOB_STATUS_ADMITTED},
+                    to_status=JOB_STATUS_PLACING,
+                )
+                if won:
+                    await session.commit()
+                    await session.refresh(job)
+            return job
+        if bind.bound:
+            await apply_bind(session, job, bind)
+            if job.status == JOB_STATUS_ADMITTED:
+                won = await cas_status_transition(
+                    session,
+                    job_id=job.id,
+                    from_statuses={JOB_STATUS_ADMITTED},
+                    to_status=JOB_STATUS_PLACING,
+                )
+                if won:
+                    await session.commit()
+                await session.refresh(job)
 
     nxt = _FORWARD.get(job.status)
     if nxt is None:
         return job
 
-    # Side effects on entering certain states.
+    # Concurrency budget: hold in placing when large jobs exceed caps (VAL-JOB-015).
+    if job.status == JOB_STATUS_PLACING and nxt == JOB_STATUS_PROVISIONING:
+        if not await can_admit_to_running(session, job, hyper=hyper):
+            return job
+
+    # CAS claim of the next status before side effects (VAL-JOB-016).
+    from_status = job.status
+    claimed = await cas_status_transition(
+        session,
+        job_id=job.id,
+        from_statuses={from_status},
+        to_status=nxt,
+        extra={"started_at": job.started_at or utc_now()}
+        if nxt == JOB_STATUS_RUNNING and job.started_at is None
+        else None,
+    )
+    if not claimed:
+        await session.rollback()
+        await session.refresh(job)
+        return job
+
+    # Reload after CAS so local object matches the claimed status.
+    await session.refresh(job)
+
+    # Side effects on the status we just claimed.
     if nxt == JOB_STATUS_PROVISIONING:
-        # Entering provisioning means we just finished placing.
         await _place_job(session, job)
     if nxt == JOB_STATUS_RUNNING:
         job.started_at = job.started_at or utc_now()
+        # Forced launch fail (VAL-JOB-018) before collect.
+        launch_fail = bool(getattr(hyper, "sim_launch_fail", False)) if hyper else False
+        if launch_fail:
+            job.status = JOB_STATUS_FAILED
+            job.failure_code = FAILURE_LAUNCH
+            job.finished_at = utc_now()
+            job.updated_at = utc_now()
+            attempt = await get_latest_attempt(session, job.id)
+            if attempt is None:
+                attempt = await _ensure_running_attempt(session, job)
+            attempt.status = JOB_STATUS_FAILED
+            attempt.failure_code = FAILURE_LAUNCH
+            attempt.finished_at = utc_now()
+            await session.commit()
+            await session.refresh(job)
+            return job
         await _ensure_running_attempt(session, job)
-    if job.status == JOB_STATUS_RUNNING and nxt == JOB_STATUS_COLLECTING:
+    if from_status == JOB_STATUS_RUNNING and nxt == JOB_STATUS_COLLECTING:
         # Optional sim run sleep — re-check cancel/timeout after.
         if run_sleep_s and run_sleep_s > 0:
-            # Release "busy work" via asyncio; used by combined worker.
             import asyncio
 
             await asyncio.sleep(run_sleep_s)
@@ -821,6 +927,7 @@ async def advance_job_one_step(
             if is_terminal(job.status):
                 return job
             if await should_timeout(job):
+                # Revert collecting claim is hard; mark timeout from any.
                 return await mark_timeout(session, job)
         attempt = await get_latest_attempt(session, job.id)
         if attempt is None:
@@ -835,13 +942,32 @@ async def advance_job_one_step(
             attempt.status = JOB_STATUS_SUCCEEDED
             attempt.finished_at = attempt.finished_at or utc_now()
 
-    job.status = nxt
     job.updated_at = utc_now()
-    if nxt == JOB_STATUS_RUNNING and job.started_at is None:
-        job.started_at = utc_now()
     await session.commit()
     await session.refresh(job)
     return job
+
+
+async def claim_and_advance_job(
+    session: AsyncSession,
+    job_id: str,
+    *,
+    worker_id: str = "worker",
+    hyper: Any | None = None,
+    run_sleep_s: float = 0.0,
+) -> Job | None:
+    """CAS-style claim a single job by id and advance one step (VAL-JOB-016)."""
+
+    job = await get_job(session, job_id)
+    if job is None or is_terminal(job.status):
+        return job
+    return await advance_job_one_step(
+        session,
+        job,
+        run_sleep_s=run_sleep_s,
+        hyper=hyper,
+        worker_id=worker_id,
+    )
 
 
 async def drain_jobs_once(
@@ -849,6 +975,7 @@ async def drain_jobs_once(
     *,
     run_sleep_s: float = 0.0,
     limit: int = 16,
+    hyper: Any | None = None,
 ) -> int:
     """Advance each drainable job by one step. Returns jobs touched."""
 
@@ -861,6 +988,7 @@ async def drain_jobs_once(
                 session,
                 job,
                 run_sleep_s=run_sleep_s if job.status == JOB_STATUS_RUNNING else 0.0,
+                hyper=hyper,
             )
             if updated.status != before:
                 advanced += 1
@@ -879,6 +1007,7 @@ async def run_job_to_terminal(
     *,
     run_sleep_s: float = 0.0,
     max_steps: int = 20,
+    hyper: Any | None = None,
 ) -> Job:
     """Utility for tests: advance until terminal or max_steps."""
 
@@ -888,7 +1017,12 @@ async def run_job_to_terminal(
     for _ in range(max_steps):
         if is_terminal(job.status):
             return job
-        job = await advance_job_one_step(session, job, run_sleep_s=run_sleep_s)
+        job = await advance_job_one_step(
+            session,
+            job,
+            run_sleep_s=run_sleep_s,
+            hyper=hyper,
+        )
     return job
 
 
@@ -914,6 +1048,7 @@ __all__ = [
     "build_sim_nccl_env",
     "build_sim_rankmap",
     "cancel_job",
+    "claim_and_advance_job",
     "drain_jobs_once",
     "get_attempt",
     "get_fabric_report",
@@ -924,6 +1059,7 @@ __all__ = [
     "job_detail_public",
     "list_attempts",
     "list_drainable_jobs",
+    "mark_failed",
     "mark_timeout",
     "post_job_results",
     "run_job_to_terminal",

@@ -8,6 +8,7 @@ from hypercluster.domain.job_lifecycle import (
     JOB_STATUS_TIMEOUT,
     TERMINAL_STATUSES,
     cancel_job,
+    claim_and_advance_job,
     drain_jobs_once,
 )
 from hypercluster.domain.jobs import (
@@ -70,6 +71,7 @@ __all__ = [
     "ProviderError",
     "admit_job",
     "cancel_job",
+    "claim_and_advance_job",
     "create_offer",
     "drain_jobs_once",
     "get_job",

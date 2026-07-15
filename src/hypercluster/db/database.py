@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -69,9 +71,16 @@ class Database:
         self._closed = True
 
     async def healthcheck(self) -> bool:
-        """Return True when a trivial query succeeds (readiness probe)."""
+        """Return True when the DB is usable (readiness probe).
+
+        Fail closed when the SQLite parent directory is not writable (VAL-SCAF-035)
+        or when a trivial connectivity probe fails. Never depends on master
+        Postgres (the challenge uses CHALLENGE_DATABASE_URL only).
+        """
 
         if not self._initialized or self._closed:
+            return False
+        if not self._sqlite_path_writable():
             return False
         try:
             async with self.engine.connect() as connection:
@@ -79,6 +88,32 @@ class Database:
             return True
         except Exception:
             return False
+
+    def _sqlite_path_writable(self) -> bool:
+        """Return False when a file-backed SQLite parent is not writable.
+
+        Checks directory existence, owner-write mode bit (fail-closed even when
+        the process is root and `os.access` would still return True), and DAC
+        access for non-root runtimes (real containers as appuser).
+        """
+
+        path = _sqlite_path_from_url(self.database_url)
+        if path is None:
+            return True  # in-memory or non-file URL
+        parent = path.parent
+        if not parent.exists() or not parent.is_dir():
+            return False
+        try:
+            mode = parent.stat().st_mode
+        except OSError:
+            return False
+        # No owner-write bit → treat as unwritable (root + 0o500 mounts).
+        if not (mode & stat.S_IWUSR):
+            return False
+        # Non-root still subject to DAC.
+        if os.geteuid() != 0 and not os.access(parent, os.W_OK):
+            return False
+        return True
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:

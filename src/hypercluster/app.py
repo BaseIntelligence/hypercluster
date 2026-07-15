@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 
@@ -12,29 +11,29 @@ from fastapi import APIRouter, FastAPI
 
 from hypercluster.api.public import router as default_public_router
 from hypercluster.db.database import Database
-from hypercluster.settings import Settings, get_settings
+from hypercluster.settings import (
+    HyperSettings,
+    Settings,
+    get_hyper_settings,
+    get_settings,
+)
 from hypercluster.weights import get_weights
 
 BackgroundTaskFactory = Callable[[FastAPI], Coroutine[Any, Any, None]]
 
 
-def _env_flag_true(name: str) -> bool:
-    """Parse a boolean-ish environment flag (true/1/yes/on)."""
-
-    raw = os.environ.get(name, "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
-async def _scaffold_combined_worker_loop(app: FastAPI) -> None:
+async def _scaffold_combined_worker_loop(
+    app: FastAPI,
+    *,
+    interval_seconds: float = 5.0,
+) -> None:
     """Lightweight combined-mode loop until real queue/worker lands.
 
     Keeps the SDK `worker` readiness probe green while the process is up.
     Later milestones replace this with marketplace/job/weight drain loops.
     """
 
-    interval = float(os.environ.get("HYPER_COMBINED_WORKER_INTERVAL_SECONDS", "5") or "5")
-    if interval < 0.05:
-        interval = 0.05
+    interval = interval_seconds if interval_seconds >= 0.05 else 0.05
     try:
         while True:
             await asyncio.sleep(interval)
@@ -47,6 +46,7 @@ def create_app(
     *,
     public_router: APIRouter | None = None,
     background_tasks: Sequence[BackgroundTaskFactory] | None = None,
+    hyper_settings: HyperSettings | None = None,
 ) -> FastAPI:
     """Build the challenge FastAPI app via Base SDK factory.
 
@@ -60,17 +60,24 @@ def create_app(
 
     `HYPER_COMBINED_WORKER=true` (or explicit `background_tasks`) registers an
     in-process worker task so the factory installs the required worker probe
-    (VAL-SCAF-012 / VAL-SCAF-029). Default remains no worker probe.
+    (VAL-SCAF-012 / VAL-SCAF-029). Default remains no worker probe. HYPER_*
+    knobs must not break Base identity contracts (VAL-SCAF-028).
     """
 
     app_settings = settings if settings is not None else get_settings()
+    product = hyper_settings if hyper_settings is not None else get_hyper_settings()
     database = Database(app_settings.database_url)
 
     tasks: list[BackgroundTaskFactory]
     if background_tasks is not None:
         tasks = list(background_tasks)
-    elif _env_flag_true("HYPER_COMBINED_WORKER"):
-        tasks = [_scaffold_combined_worker_loop]
+    elif product.combined_worker:
+        interval = product.combined_worker_interval_seconds
+
+        async def _combined_loop(app: FastAPI) -> None:
+            await _scaffold_combined_worker_loop(app, interval_seconds=interval)
+
+        tasks = [_combined_loop]
     else:
         tasks = []
 
@@ -82,6 +89,7 @@ def create_app(
         background_tasks=tuple(tasks),
     )
     app.state.settings = app_settings
+    app.state.hyper_settings = product
     app.state.database = database
     app.state.combined_worker_enabled = bool(tasks)
     return app

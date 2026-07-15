@@ -867,6 +867,90 @@ class FabricReportRow(Base):
         }
 
 
+class WeightSnapshot(Base):
+    """Monochronic raw-weight push snapshot (architecture §3.1 / §10.3).
+
+    UNIQUE(epoch, revision). revision bumps on recompute within an epoch.
+    push_status: pending|acked|rejected|sim|failed|invalid_window
+    Challenge never calls set_weights; this is raw hotkey egress only.
+    """
+
+    __tablename__ = "weight_snapshots"
+    __table_args__ = (
+        UniqueConstraint("epoch", "revision", name="uq_weight_snapshots_epoch_rev"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    nonce: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    weights_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # pending|acked|rejected|sim|failed|invalid_window
+    push_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    master_ack_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canonical_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    master_snapshot_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def weights_map(self) -> dict[str, float]:
+        try:
+            parsed = json.loads(self.weights_json or "{}")
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        out: dict[str, float] = {}
+        for key, val in parsed.items():
+            try:
+                out[str(key)] = float(val)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def to_dict(self) -> dict[str, Any]:
+        ack: Any = None
+        if self.master_ack_json:
+            try:
+                ack = json.loads(self.master_ack_json)
+            except (TypeError, ValueError):
+                ack = self.master_ack_json
+        return {
+            "id": self.id,
+            "epoch": int(self.epoch),
+            "revision": int(self.revision),
+            "computed_at": isoformat_utc(self.computed_at),
+            "expires_at": isoformat_utc(self.expires_at),
+            "nonce": self.nonce,
+            "payload_digest": self.payload_digest,
+            "weights": self.weights_map(),
+            "push_status": self.push_status,
+            "master_ack": ack,
+            "master_snapshot_id": self.master_snapshot_id,
+            "created_at": isoformat_utc(self.created_at),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+
+
 class RequestNonce(Base):
     """Replay protection for signed miner requests."""
 
@@ -899,6 +983,7 @@ __all__ = [
     "Provider",
     "RequestNonce",
     "Score",
+    "WeightSnapshot",
     "isoformat_utc",
     "utc_now",
 ]

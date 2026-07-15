@@ -55,10 +55,22 @@ attest_app = typer.Typer(
     no_args_is_help=True,
     help="dstack TEE offline verify and compose-hash helpers.",
 )
+score_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Score recompute and per-hotkey show (VAL-SCORE-019).",
+)
+weights_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Raw weight preview and push (VAL-SCORE-020). Never set_weights.",
+)
 app.add_typer(sim_app, name="sim")
 app.add_typer(nodes_app, name="nodes")
 app.add_typer(fabric_app, name="fabric")
 app.add_typer(attest_app, name="attest")
+app.add_typer(score_app, name="score")
+app.add_typer(weights_app, name="weights")
 fabric_app.add_typer(fabric_report_app, name="report")
 
 
@@ -684,6 +696,279 @@ def fabric_report_show_cmd(
     typer.echo(f"report_digest={digest}")
     if payload.get("nodes"):
         typer.echo(f"node_count={len(payload['nodes'])}")
+    raise typer.Exit(code=0)
+
+
+def _shared_token_opt() -> str:
+    return (
+        os.environ.get("CHALLENGE_SHARED_TOKEN")
+        or os.environ.get("HYPER_SHARED_TOKEN")
+        or ""
+    )
+
+
+@score_app.command("show")
+def score_show_cmd(
+    hotkey: str = typer.Option(..., "--hotkey", help="Miner hotkey (ss58)"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    limit: int = typer.Option(50, "--limit", help="Max history rows"),
+) -> None:
+    """Print factor/composite history for a hotkey (VAL-SCORE-019). Never prints tokens."""
+
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(
+            f"{base}/v1/scores/{hotkey}",
+            params={"limit": limit},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"score show failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(response.text)
+    if response.status_code != 200:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@score_app.command("recompute")
+def score_recompute_cmd(
+    epoch: int | None = typer.Option(
+        None, "--epoch", help="Optional epoch bucket for weight snapshot"
+    ),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    master: str | None = typer.Option(
+        None,
+        "--master",
+        help="Master base URL for optional push (env HYPER_MASTER_BASE_URL)",
+    ),
+) -> None:
+    """Refresh aggregates and optionally build a pending weight snapshot (VAL-SCORE-019).
+
+    Uses challenge local DB via process settings when available; prefers live
+    API weight-preview for remote base URL mode. Never prints secrets.
+    """
+
+    import asyncio
+
+    from hypercluster.db.database import Database
+    from hypercluster.settings import get_hyper_settings, get_settings
+    from hypercluster.weight_push import (
+        WeightPushValidationError,
+        create_pending_snapshot,
+    )
+    from hypercluster.weights import load_raw_weights, weight_preview_payload
+
+    base = _resolve_base_url(url, host, port)
+    # Prefer live API preview for remote confirmation, then refresh via DB.
+    try:
+        preview = httpx.get(f"{base}/v1/weight-preview", timeout=10.0)
+        if preview.status_code == 200:
+            typer.echo(f"live weight-preview: {preview.text}")
+    except httpx.HTTPError as exc:
+        typer.echo(f"weight-preview probe warning: {exc}", err=True)
+
+    settings = get_settings()
+    hyper = get_hyper_settings()
+    database = Database(settings.database_url)
+
+    async def _run() -> dict[str, Any]:
+        await database.init()
+        try:
+            weights = await load_raw_weights(database=database, hyper=hyper)
+            body = await weight_preview_payload(database=database, hyper=hyper)
+            body["recomputed"] = True
+            body["weights"] = weights
+            if epoch is not None and weights:
+                try:
+                    async with database.session() as session:
+                        snap = await create_pending_snapshot(
+                            session,
+                            challenge_slug=settings.slug,
+                            epoch=int(epoch),
+                            weights=weights,
+                            hyper=hyper,
+                        )
+                    body["snapshot"] = {
+                        "epoch": snap.epoch,
+                        "revision": snap.revision,
+                        "push_status": snap.push_status,
+                        "payload_digest": snap.payload_digest,
+                    }
+                except WeightPushValidationError as exc:
+                    body["snapshot_error"] = {"code": exc.code, "detail": exc.message}
+            return body
+        finally:
+            await database.close()
+
+    result = asyncio.run(_run())
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+    raise typer.Exit(code=0)
+
+
+@weights_app.command("preview")
+def weights_preview_cmd(
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+) -> None:
+    """Print pending/latest raw weight map (VAL-SCORE-020/028). Never prints tokens."""
+
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(f"{base}/v1/weight-preview", timeout=10.0)
+    except httpx.HTTPError as exc:
+        typer.echo(f"weights preview failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    # Redact auth tokens if present by never echoing env secrets.
+    typer.echo(response.text)
+    if response.status_code != 200:
+        raise typer.Exit(code=1)
+    try:
+        body = response.json()
+    except ValueError:
+        raise typer.Exit(code=1) from None
+    weights = body.get("weights") or {}
+    if not isinstance(weights, dict):
+        typer.echo("weights preview shape invalid", err=True)
+        raise typer.Exit(code=1)
+    for key, val in weights.items():
+        try:
+            fval = float(val)
+        except (TypeError, ValueError):
+            typer.echo(f"non-numeric weight for {key}", err=True)
+            raise typer.Exit(code=1) from None
+        if fval < 0 or fval != fval:  # noqa: PLR0124 — NaN check
+            typer.echo(f"illegal weight for {key}: {val}", err=True)
+            raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@weights_app.command("push")
+def weights_push_cmd(
+    epoch: int | None = typer.Option(None, "--epoch", help="Epoch bucket"),
+    revision: int | None = typer.Option(None, "--revision", help="Monochronic revision"),
+    master: str | None = typer.Option(
+        None,
+        "--master",
+        help="Master base URL (default HYPER_MASTER_BASE_URL or http://127.0.0.1:3201)",
+    ),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Challenge shared token (or CHALLENGE_SHARED_TOKEN). Never printed.",
+    ),
+    expires_at: str | None = typer.Option(
+        None,
+        "--expires-at",
+        help="Optional ISO expires_at override (for inverted/expired rejection tests)",
+    ),
+    computed_at: str | None = typer.Option(
+        None,
+        "--computed-at",
+        help="Optional ISO computed_at override",
+    ),
+) -> None:
+    """Authenticated raw-weight push to master/mock-master (VAL-SCORE-015/020/030).
+
+    Never calls on-chain set_weights. Full token is never printed.
+    """
+
+    import asyncio
+    from datetime import datetime
+
+    from hypercluster.db.database import Database
+    from hypercluster.settings import get_hyper_settings, get_settings
+    from hypercluster.weight_push import WeightPushClient
+    from hypercluster.weights import load_raw_weights
+
+    settings = get_settings()
+    hyper = get_hyper_settings()
+    resolved_token = token or _shared_token_opt() or (settings.shared_token or "")
+    if not resolved_token:
+        typer.echo(
+            "weights push requires --token or CHALLENGE_SHARED_TOKEN",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    # Never echo the full token; only a redacted fingerprint.
+    typer.echo(f"auth=token_set len={len(resolved_token)} redacted=***")
+
+    master_url = (
+        master
+        or os.environ.get("HYPER_MASTER_BASE_URL")
+        or getattr(hyper, "master_base_url", None)
+        or "http://127.0.0.1:3201"
+    )
+    database = Database(settings.database_url)
+
+    force_computed = None
+    force_expires = None
+    if computed_at:
+        force_computed = datetime.fromisoformat(computed_at.replace("Z", "+00:00"))
+    if expires_at:
+        force_expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+
+    async def _run() -> dict[str, Any]:
+        await database.init()
+        try:
+            weights = await load_raw_weights(database=database, hyper=hyper)
+            client = WeightPushClient(
+                database=database,
+                challenge_slug=settings.slug,
+                master_base_url=str(master_url),
+                shared_token=resolved_token,
+                hyper=hyper,
+            )
+            # Never pass secrets into result dump.
+            result = await client.push_once(
+                weights=weights if weights else None,
+                epoch=epoch,
+                revision=revision,
+                force_computed_at=force_computed,
+                force_expires_at=force_expires,
+            )
+            return {
+                "status": result.status,
+                "epoch": result.epoch,
+                "revision": result.revision,
+                "payload_digest": result.payload_digest,
+                "snapshot_id": result.snapshot_id,
+                "local_id": result.local_id,
+                "push_status": result.push_status,
+                "idempotent": result.idempotent,
+                "error": result.error,
+                "master": str(master_url),
+            }
+        finally:
+            await database.close()
+
+    body = asyncio.run(_run())
+    typer.echo(json.dumps(body, indent=2, sort_keys=True))
+    # Fail closed for illegal windows / empty / rejections so scripts exit non-zero.
+    if body.get("status") in {
+        "invalid_window",
+        "inverted_window",
+        "expired_window",
+        "empty_weights",
+        "rejected",
+        "transport_error",
+        "server_error",
+        "ack_mismatch",
+        "malformed_ack",
+    }:
+        raise typer.Exit(code=1)
+    if body.get("status") not in {"acknowledged", "skipped_empty"}:
+        # soft ok for idempotent already-acked is included in acknowledged
+        if body.get("push_status") not in {"acked", "sim"}:
+            raise typer.Exit(code=1)
     raise typer.Exit(code=0)
 
 

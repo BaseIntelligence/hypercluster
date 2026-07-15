@@ -1026,22 +1026,20 @@ async def scores_for_hotkey(
 @public_route(tags=["scoring"])
 @router.get("/v1/weight-preview")
 async def weight_preview(
-    session: DbSession,
+    request: Request,
 ) -> dict[str, Any]:
-    """Pending/latest raw weight map (VAL-SCORE-009/010; architecture §4.3).
+    """Pending/latest raw weight map (VAL-SCORE-009/010/028; architecture §4.3).
 
-    Vacant participation returns ``weights: {}`` — burn-safe, never NaN.
+    Returns the monochronic snapshot map when one exists (pending or acked),
+    else the live aggregation window. Vacant → ``weights: {}`` burn-safe.
+    Shape aligns with get_weights / push payload weights (VAL-SCORE-016).
     """
 
-    from hypercluster.domain.aggregation import compute_raw_weights
-    from hypercluster.settings import get_hyper_settings
+    from hypercluster.weights import weight_preview_payload
 
-    weights = await compute_raw_weights(session, hyper=get_hyper_settings())
-    return {
-        "weights": weights,
-        "count": len(weights),
-        "empty": len(weights) == 0,
-    }
+    database = getattr(request.app.state, "database", None)
+    hyper = getattr(request.app.state, "hyper_settings", None)
+    return await weight_preview_payload(database=database, hyper=hyper)
 
 
 __all__ = [

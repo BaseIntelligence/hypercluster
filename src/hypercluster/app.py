@@ -27,17 +27,30 @@ async def _scaffold_combined_worker_loop(
     *,
     interval_seconds: float = 5.0,
 ) -> None:
-    """Combined-mode loop: drain job lifecycle (place/launch/collect/score).
+    """Combined-mode loop: drain job lifecycle + optional weight push tick.
 
     Keeps the SDK `worker` readiness probe green while advancing admitted
-    jobs under local sim (VAL-JOB-006/017). Interval and sim run sleep come
+    jobs under local sim (VAL-JOB-006/017). Weight push is best-effort and
+    must never block /health (VAL-SCORE-023). Interval and sim run sleep come
     from HyperSettings on app.state.
     """
 
     interval = interval_seconds if interval_seconds >= 0.05 else 0.05
+    push_every = 0.0
+    last_push = 0.0
+    hyper = getattr(app.state, "hyper_settings", None)
+    if hyper is not None:
+        push_every = float(getattr(hyper, "weight_push_interval_s", 120.0) or 120.0)
     try:
         while True:
             await _drain_job_lifecycle(app)
+            # Cooperative push tick: never await longer than the drain interval
+            # in a way that freezes identity surfaces (asyncio single-thread).
+            if push_every > 0:
+                now = asyncio.get_event_loop().time()
+                if now - last_push >= push_every:
+                    await _tick_weight_push(app)
+                    last_push = now
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         raise
@@ -67,6 +80,20 @@ async def _drain_job_lifecycle(app: FastAPI) -> None:
         import logging
 
         logging.getLogger(__name__).exception("combined worker job drain failed")
+
+
+async def _tick_weight_push(app: FastAPI) -> None:
+    """One raw-weight push attempt (non-fatal). No on-chain set_weights."""
+
+    client = getattr(app.state, "weight_push_client", None)
+    if client is None:
+        return
+    try:
+        await client.push_once()
+    except Exception:  # noqa: BLE001 — never crash the worker loop
+        import logging
+
+        logging.getLogger(__name__).exception("weight push tick failed")
 
 
 def create_app(
@@ -112,6 +139,24 @@ def create_app(
     # Bind DB for process-level get_weights (aggregation window → raw map).
     bind_weights_runtime(database, product)
 
+    # Optional dedicated weight-push background task when master is configured
+    # and combined worker is off (still non-blocking for /health; VAL-SCORE-023).
+    from hypercluster.weight_push import maybe_build_push_client, run_weight_push_loop
+
+    push_client = maybe_build_push_client(
+        database=database,
+        settings=app_settings,
+        hyper=product,
+    )
+    if push_client is not None and not product.combined_worker and background_tasks is None:
+        # Run push loop as its own background task so /health keeps responding.
+        interval = float(product.weight_push_interval_s)
+
+        async def _push_loop(app: FastAPI) -> None:
+            await run_weight_push_loop(push_client, interval_seconds=interval)
+
+        tasks = list(tasks) + [_push_loop]
+
     app = create_challenge_app(
         settings=app_settings,
         database=database,
@@ -123,6 +168,7 @@ def create_app(
     app.state.hyper_settings = product
     app.state.database = database
     app.state.combined_worker_enabled = bool(tasks)
+    app.state.weight_push_client = push_client
     return app
 
 

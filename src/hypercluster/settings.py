@@ -78,6 +78,16 @@ class HyperSettings(BaseSettings):
         ),
     )
     weight_push_interval_s: float = Field(default=120.0, ge=1.0)
+    # Raw-weight push to Base master / mock-master (VAL-SCORE-013..015/023/030).
+    # Env: HYPER_MASTER_BASE_URL (e.g. http://127.0.0.1:3201),  
+    # HYPER_WEIGHT_PUSH_ENABLED, HYPER_WEIGHT_PUSH_FRESHNESS_S, HYPER_EPOCH_SECONDS.
+    master_base_url: str | None = Field(default=None)
+    weight_push_enabled: bool = True
+    weight_push_freshness_s: int = Field(default=300, ge=30)
+    epoch_seconds: int = Field(default=3600, ge=1)
+    weight_push_timeout_s: float = Field(default=10.0, ge=0.5)
+    # Allow internal /internal/v1/dev/seed-scores for sim weights scenario.
+    sim_seed_enabled: bool = True
     score_window_attempts: int = Field(default=50, ge=1)
     efficiency_floor: float = Field(default=0.0, ge=0.0)
     # Soft self-deal damping fraction in [0, 1] (VAL-SCORE-012 / VAL-SCORE-027).

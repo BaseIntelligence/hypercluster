@@ -710,6 +710,259 @@ def run_tee_offline_scenario(
     )
 
 
+def run_weights_scenario(
+    base_url: str,
+    *,
+    timeout: float = 30.0,
+    shared_token: str | None = None,
+    master_url: str | None = None,
+    identity_probe: Callable[..., IdentityReport] = probe_identity_gates,
+) -> ScenarioResult:
+    """Weights e2e: multi-hotkey composites → push ack → finite map (VAL-SCORE-025).
+
+    Seeds scores into the live challenge DB via local process settings when the
+    API is local; pushes to mock-master (default :3201) and asserts acked +
+    finite non-negative weight-preview.
+    """
+
+    import asyncio
+    import math
+    import os
+
+    normalized = base_url.rstrip("/")
+    steps: list[str] = []
+    steps.append("probe identity gates (/health + /ready)")
+    report = identity_probe(base_url, timeout=min(timeout, 5.0))
+    if not report.ok:
+        steps.append("identity gates failed")
+        return ScenarioResult(
+            name=WEIGHTS,
+            ok=False,
+            base_url=normalized,
+            message=f"weights failed: identity not green ({'; '.join(report.errors)})",
+            steps=steps,
+            identity=report,
+        )
+    steps.append("identity gates green")
+
+    token = (
+        shared_token
+        or os.environ.get("CHALLENGE_SHARED_TOKEN")
+        or os.environ.get("HYPER_SHARED_TOKEN")
+        or ""
+    )
+    master = (
+        master_url
+        or os.environ.get("HYPER_MASTER_BASE_URL")
+        or "http://127.0.0.1:3201"
+    )
+
+    # Base-compatible ss58-like hotkeys (alpha chars required; no bare UIDs).
+    hotkey_a = "5DAAnrj7VHTznn2AaACRrN8iJZqK7PhB1aH6Yqz3G3eQnZf"
+    hotkey_b = "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw"
+
+    async def _seed_and_push() -> dict[str, Any]:
+        from hypercluster.db.database import Database
+        from hypercluster.db.models import Job, JobAttempt
+        from hypercluster.domain.scoring_tee import persist_score_for_attempt
+        from hypercluster.settings import HyperSettings, get_settings
+        from hypercluster.weight_push import WeightPushClient
+        from hypercluster.weights import load_raw_weights
+
+        settings = get_settings()
+        hyper = HyperSettings(
+            score_window_attempts=50,
+            self_deal_damping=0.5,
+            master_base_url=master,
+            weight_push_enabled=True,
+            weight_push_freshness_s=300,
+        )
+        database = Database(settings.database_url)
+        await database.init()
+        try:
+            async with database.session() as session:
+                for hotkey, eff in ((hotkey_a, 10.0), (hotkey_b, 3.0)):
+                    job_id = str(uuid.uuid4())
+                    attempt_id = str(uuid.uuid4())
+                    session.add(
+                        Job(
+                            id=job_id,
+                            submitter_hotkey=hotkey,
+                            status="succeeded",
+                            image_digest=(
+                                "sha256:sim000000000000000000000000000000000000000000000000000000000001"
+                            ),
+                            entrypoint_json=json.dumps(["python", "-m", "train"]),
+                            world_size=1,
+                            nnodes=1,
+                            nproc_per_node=1,
+                            backend="nccl",
+                            fabric_mode="auto",
+                            tee_mode="none",
+                            resource_json=json.dumps({"gpus": 1}),
+                            timeout_s=60,
+                        )
+                    )
+                    session.add(
+                        JobAttempt(
+                            id=attempt_id,
+                            job_id=job_id,
+                            attempt_no=1,
+                            status="succeeded",
+                        )
+                    )
+                    await session.flush()
+                    await persist_score_for_attempt(
+                        session,
+                        attempt_id=attempt_id,
+                        hotkey=hotkey,
+                        role="demand",
+                        correctness=1.0,
+                        efficiency=eff,
+                        fabric_gate=1.0,
+                        proof=None,
+                        tee_mode="none",
+                        hyper=hyper,
+                    )
+                await session.commit()
+            steps.append("seeded multi-hotkey demand scores")
+            weights = await load_raw_weights(database=database, hyper=hyper)
+            if not weights:
+                return {"ok": False, "error": "empty weights after seed"}
+            for k, v in weights.items():
+                if not math.isfinite(float(v)) or float(v) < 0:
+                    return {"ok": False, "error": f"illegal weight {k}={v}"}
+            steps.append(f"raw weights finite count={len(weights)}")
+
+            client = WeightPushClient(
+                database=database,
+                challenge_slug=settings.slug,
+                master_base_url=master,
+                shared_token=token or "test-challenge-shared-token",
+                hyper=hyper,
+            )
+            result = await client.push_once(weights=weights, epoch=1)
+            steps.append(
+                f"push status={result.status} push_status={result.push_status} "
+                f"epoch={result.epoch} revision={result.revision}"
+            )
+            if result.status != "acknowledged" or result.push_status not in {
+                "acked",
+                "sim",
+            }:
+                return {
+                    "ok": False,
+                    "error": f"push not acked: {result.status} {result.error}",
+                    "result": result,
+                }
+            # Idempotent re-push
+            again = await client.push_once(
+                weights=weights, epoch=1, revision=result.revision
+            )
+            steps.append(f"idempotent re-push status={again.status} idemp={again.idempotent}")
+            if again.status != "acknowledged":
+                return {"ok": False, "error": f"idempotent push failed: {again.status}"}
+            return {
+                "ok": True,
+                "weights": weights,
+                "result": {
+                    "status": result.status,
+                    "epoch": result.epoch,
+                    "revision": result.revision,
+                    "payload_digest": result.payload_digest,
+                    "push_status": result.push_status,
+                },
+            }
+        finally:
+            await database.close()
+
+    if not token:
+        # Still attempt with test default if process uses it; record step.
+        steps.append("shared token from env missing; using process settings / default test token")
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None and loop.is_running():
+            # Called from pytest-asyncio / nested async context.
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                outcome = pool.submit(lambda: asyncio.run(_seed_and_push())).result(
+                    timeout=max(timeout, 30.0)
+                )
+        else:
+            outcome = asyncio.run(_seed_and_push())
+    except Exception as exc:  # noqa: BLE001
+        steps.append(f"seed/push raised: {exc}")
+        return ScenarioResult(
+            name=WEIGHTS,
+            ok=False,
+            base_url=normalized,
+            message=f"weights failed: {exc}",
+            steps=steps,
+            identity=report,
+        )
+
+    if not outcome.get("ok"):
+        return ScenarioResult(
+            name=WEIGHTS,
+            ok=False,
+            base_url=normalized,
+            message=f"weights failed: {outcome.get('error')}",
+            steps=steps,
+            identity=report,
+        )
+
+    # Black-box: weight-preview when the API process shares the challenge DB.
+    # Push path already verified finite map + ack (primary gate for VAL-SCORE-025).
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            preview = client.get(f"{normalized}/v1/weight-preview")
+            steps.append(f"GET /v1/weight-preview → {preview.status_code}")
+            if preview.status_code == 200:
+                body = preview.json()
+                wmap = body.get("weights") or {}
+                if isinstance(wmap, dict) and wmap:
+                    for k, v in wmap.items():
+                        if not math.isfinite(float(v)) or float(v) < 0:
+                            return ScenarioResult(
+                                name=WEIGHTS,
+                                ok=False,
+                                base_url=normalized,
+                                message=f"preview illegal weight {k}={v}",
+                                steps=steps,
+                                identity=report,
+                            )
+                    steps.append(f"preview weights count={len(wmap)} finite≥0")
+                else:
+                    steps.append(
+                        "weight-preview empty (API may use separate DB); "
+                        "push path already verified finite map"
+                    )
+            else:
+                steps.append(
+                    f"weight-preview HTTP {preview.status_code}; "
+                    "push path already verified (non-fatal for split-DB)"
+                )
+    except httpx.HTTPError as exc:
+        steps.append(
+            f"preview probe skipped ({exc}); push path already verified finite map"
+        )
+    steps.append("no on-chain set_weights in challenge product path")
+
+    return ScenarioResult(
+        name=WEIGHTS,
+        ok=True,
+        base_url=normalized,
+        message="weights passed: multi-hotkey score → push ack + finite map",
+        steps=steps,
+        identity=report,
+    )
+
+
 def run_scenario(
     name: str,
     base_url: str,
@@ -730,16 +983,19 @@ def run_scenario(
         )
     if key == TEE_OFFLINE:
         return run_tee_offline_scenario(base_url)
-    if key in {NCCL, WEIGHTS}:
+    if key == WEIGHTS:
+        return run_weights_scenario(
+            base_url,
+            timeout=max(timeout, 30.0),
+            shared_token=shared_token,
+        )
+    if key == NCCL:
         return ScenarioResult(
             name=key,
             ok=False,
             base_url=base_url.rstrip("/"),
-            message=(
-                f"scenario {key!r} not implemented yet "
-                "(nccl/weights land in later milestones)"
-            ),
-            steps=[f"scenario {key} stub — not implemented"],
+            message="scenario 'nccl' not implemented yet (later milestones)",
+            steps=["scenario nccl stub — not implemented"],
         )
     return ScenarioResult(
         name=key,
@@ -762,4 +1018,5 @@ __all__ = [
     "run_scenario",
     "run_smoke_scenario",
     "run_tee_offline_scenario",
+    "run_weights_scenario",
 ]

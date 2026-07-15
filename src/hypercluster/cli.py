@@ -341,8 +341,35 @@ def nodes_fabric_scan_cmd(
     raise typer.Exit(code=0)
 
 
+def _load_plan_spec(spec: Path) -> dict[str, Any]:
+    """Load fabric placement-spec JSON/YAML for ``fabric plan --spec``."""
+
+    text = spec.read_text(encoding="utf-8")
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            import yaml  # type: ignore
+
+            loaded = yaml.safe_load(text)
+        except Exception as exc:  # noqa: BLE001
+            typer.echo(f"error: cannot parse fabric plan --spec {spec}: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+    if not isinstance(loaded, dict):
+        typer.echo("error: fabric plan --spec must be a JSON/YAML object", err=True)
+        raise typer.Exit(code=2)
+    return loaded
+
+
 @fabric_app.command("plan")
 def fabric_plan_cmd(
+    spec: Path | None = typer.Option(
+        None,
+        "--spec",
+        help="Path to placement-spec JSON/YAML (world_size/nnodes/policy/fabric/seed)",
+        exists=False,
+        dir_okay=False,
+    ),
     job_id: str | None = typer.Option(
         None,
         "--job-id",
@@ -363,12 +390,30 @@ def fabric_plan_cmd(
     host: str | None = typer.Option(None, help="API host when --url omitted"),
     port: int | None = typer.Option(None, help="API port when --url omitted"),
 ) -> None:
-    """Topology plan dry-run (VAL-FAB-016). Never advances job to running."""
+    """Topology plan dry-run (VAL-FAB-016 / VAL-CLI-010). Never advances job to running."""
 
     from hypercluster.fabric.planner import PlacementRequest, place_ranks
     from hypercluster.sim.inventory import seed_sim_inventory
 
     _ = dry_run  # dry-run is always true for this command surface
+
+    # --spec wins defaults; explicit flags that follow still override.
+    if spec is not None:
+        if not spec.exists():
+            typer.echo(f"error: fabric plan spec not found: {spec}", err=True)
+            raise typer.Exit(code=2)
+        loaded = _load_plan_spec(spec)
+        world_size = int(loaded.get("world_size", world_size))
+        nnodes = int(loaded.get("nnodes", nnodes))
+        nproc_per_node = int(loaded.get("nproc_per_node", nproc_per_node))
+        policy = str(loaded.get("policy") or loaded.get("placement_policy") or policy)
+        fabric = str(
+            loaded.get("fabric") or loaded.get("fabric_mode") or fabric
+        )
+        seed = int(loaded.get("seed", seed))
+        if job_id is None and loaded.get("job_id"):
+            job_id = str(loaded["job_id"])
+
     job_payload: dict[str, Any] | None = None
     if job_id:
         base = _resolve_base_url(url, host, port)
@@ -423,11 +468,99 @@ def fabric_plan_cmd(
         "reason": plan.reason,
         "failure_code": plan.failure_code,
         "job_status_unchanged": True,
+        "spec": str(spec) if spec is not None else None,
     }
     typer.echo(json.dumps(out, indent=2, sort_keys=True))
     if not plan.ok:
         raise typer.Exit(code=1)
     raise typer.Exit(code=0)
+
+
+def _fabric_launch_allowed() -> bool:
+    """True only when explicit dev gate env is set (VAL-CLI-010)."""
+
+    raw = (
+        os.environ.get("HYPER_ALLOW_FABRIC_LAUNCH")
+        or os.environ.get("HYPER_FABRIC_LAUNCH")
+        or ""
+    ).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+@fabric_app.command("launch")
+def fabric_launch_cmd(
+    job_id: str = typer.Option(..., "--job-id", help="Job id that would be launched"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Required with HYPER_ALLOW_FABRIC_LAUNCH=1 (dev-only). No silent prod restarts.",
+    ),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+) -> None:
+    """Dev-only fabric launch gate (VAL-CLI-010).
+
+    Production settings refuse by default. Even with the env allowlist, --force
+    is required so accidental restarts cannot silently re-kick prod jobs.
+    """
+
+    allowed = _fabric_launch_allowed()
+    if not allowed or not force:
+        reason = (
+            "fabric launch denied: gated (set HYPER_ALLOW_FABRIC_LAUNCH=1 and pass --force)"
+            if not allowed
+            else "fabric launch denied: --force required even when HYPER_ALLOW_FABRIC_LAUNCH is set"
+        )
+        body = {
+            "ok": False,
+            "gated": True,
+            "denied": True,
+            "allowed_env": allowed,
+            "force": force,
+            "job_id": job_id,
+            "message": reason,
+        }
+        typer.echo(json.dumps(body, indent=2, sort_keys=True))
+        typer.echo(reason, err=True)
+        raise typer.Exit(code=2)
+
+    # Dev path: still non-destructive by default — dry-check job existence only.
+    # Do not call sim_launch from CLI; lifecycle launch is owned by the API worker.
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(f"{base}/v1/jobs/{job_id}", timeout=10.0)
+    except httpx.HTTPError as exc:
+        typer.echo(f"fabric launch: job probe failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"{response.status_code} {response.text}")
+    if response.status_code != 200:
+        typer.echo(
+            "fabric launch: job not found or API error; refusing to force sim launch",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    # Explicit refusal to call launcher from CLI even with force — operator must
+    # re-submit/use job worker. Command exists as a fail-closed surface for gates.
+    typer.echo(
+        json.dumps(
+            {
+                "ok": False,
+                "gated": False,
+                "dev_allow": True,
+                "job_id": job_id,
+                "message": (
+                    "fabric launch CLI does not invoke sim_launch; use the job "
+                    "lifecycle worker. Gate opened but launch not performed."
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    raise typer.Exit(code=2)
 
 
 @attest_app.command("compose-hash")

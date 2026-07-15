@@ -141,24 +141,50 @@ def build_sim_nccl_env(
     *,
     fabric_mode: str,
     backend: str = "nccl",
+    reports: list[Any] | None = None,
 ) -> dict[str, str]:
-    """NCCL env matrix stub (planner contract v1)."""
+    """NCCL env matrix via fabric gates (VAL-FAB-021 / planner contract v1).
 
-    env: dict[str, str] = {
-        "MASTER_ADDR": "127.0.0.1",
-        "MASTER_PORT": "29500",
-        "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
-        "NCCL_SOCKET_IFNAME": "lo",
-        "HYPER_BACKEND": backend,
-        "HYPER_FABRIC_MODE": fabric_mode,
-    }
-    if fabric_mode == "ib":
-        env["NCCL_NET"] = "IB"
-        env["NCCL_IB_HCA"] = "mlx5_0"
-        env["NCCL_IB_GID_INDEX"] = "3"
-    elif fabric_mode == "eth":
-        env["NCCL_NET"] = "Socket"
-    return env
+    eth / auto-on-eth never force ``NCCL_NET=IB``. ``fabric=ib`` only sets IB
+    transport when mode evaluation sees active devices (or sim optimistic
+    empty-report path still requests IB for pure job stubs without inventory).
+    """
+
+    from hypercluster.fabric.gates import build_nccl_env_for_mode, evaluate_fabric_mode
+
+    report_list = list(reports or [])
+    mode = (fabric_mode or "auto").strip().lower()
+    # Lifecycle sim without bound node reports: preserve prior stub behavior
+    # for ib (claim IB keys) so existing job tests keep NCCL_NET=IB; eth never
+    # sets IB (VAL-FAB-021).
+    if not report_list:
+        env: dict[str, str] = {
+            "MASTER_ADDR": "127.0.0.1",
+            "MASTER_PORT": "29500",
+            "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
+            "NCCL_SOCKET_IFNAME": "lo",
+            "HYPER_BACKEND": backend,
+            "HYPER_FABRIC_MODE": mode,
+        }
+        if mode == "ib":
+            env["NCCL_NET"] = "IB"
+            env["NCCL_IB_HCA"] = "mlx5_0"
+            env["NCCL_IB_GID_INDEX"] = "3"
+        elif mode == "eth":
+            env["NCCL_NET"] = "Socket"
+        elif mode == "auto":
+            # auto without inventory stays sockets (VAL-FAB-003 path).
+            env["NCCL_NET"] = "Socket"
+        else:
+            env["NCCL_NET"] = "Socket"
+        return env
+
+    mode_eval = evaluate_fabric_mode(fabric_mode=mode, reports=report_list)
+    return build_nccl_env_for_mode(
+        fabric_mode=mode,
+        reports=report_list if mode_eval.ok or mode != "ib" else report_list,
+        backend=backend,
+    )
 
 
 def build_launch_contract(
@@ -558,16 +584,88 @@ async def list_drainable_jobs(session: AsyncSession, *, limit: int = 32) -> list
 
 
 async def _place_job(session: AsyncSession, job: Job) -> None:
+    """Plan rankmap + NCCL env; fail closed for fabric=ib with zero devices.
+
+    VAL-FAB-002/011/021: when bound to a pod, load member FabricReports, require
+    full cluster reports for multi-node, and refuse IB mode without devices.
+    """
+
+    from hypercluster.domain.fabric_reports import load_latest_reports_for_nodes
+    from hypercluster.domain.leases import get_pod
+    from hypercluster.fabric.gates import (
+        evaluate_cluster_member_reports,
+        evaluate_fabric_mode,
+    )
+
+    reports: list[Any] = []
+    member_ids: list[str] = []
+    pod_mode = "single"
+    if job.pod_id:
+        pod = await get_pod(session, job.pod_id)
+        if pod is not None:
+            member_ids = list(pod.node_ids())
+            pod_mode = pod.mode or ("cluster" if len(member_ids) > 1 else "single")
+            if member_ids:
+                reports = await load_latest_reports_for_nodes(session, member_ids)
+                need_cluster = pod_mode == "cluster" or int(job.nnodes) > 1
+                if need_cluster:
+                    cluster_eval = evaluate_cluster_member_reports(
+                        mode="cluster",
+                        member_node_ids=member_ids,
+                        reports=reports,
+                    )
+                    if not cluster_eval.may_launch:
+                        raise JobError(
+                            cluster_eval.failure_code
+                            or "cluster_fabric_reports_incomplete",
+                            cluster_eval.reason
+                            or "cluster requires FabricReports for all members",
+                            status_code=409,
+                        )
+
+    mode = (job.fabric_mode or "auto").strip().lower()
+    # VAL-FAB-002: with bound reports or empty for ib-required, fail closed.
+    if mode == "ib" and (reports or member_ids):
+        mode_eval = evaluate_fabric_mode(fabric_mode=mode, reports=reports)
+        if not mode_eval.may_succeed:
+            raise JobError(
+                mode_eval.failure_code or "missing_ib",
+                mode_eval.reason or "fabric=ib fails closed without IB devices",
+                status_code=409,
+            )
+
     rankmap = build_sim_rankmap(
         job_id=job.id,
         nnodes=int(job.nnodes),
         nproc_per_node=int(job.nproc_per_node),
         world_size=int(job.world_size),
     )
-    nccl_env = build_sim_nccl_env(fabric_mode=job.fabric_mode, backend=job.backend)
+    if member_ids and rankmap:
+        for binding in rankmap:
+            idx = 0
+            try:
+                raw = str(binding.get("node_id") or "")
+                if raw.startswith("sim-node-"):
+                    idx = int(raw.split("-")[-1])
+            except (TypeError, ValueError):
+                idx = 0
+            if 0 <= idx < len(member_ids):
+                binding["node_id"] = member_ids[idx]
+
+    nccl_env = build_sim_nccl_env(
+        fabric_mode=job.fabric_mode,
+        backend=job.backend,
+        reports=reports or None,
+    )
     launch = build_launch_contract(job=job, rankmap=rankmap, nccl_env=nccl_env)
     graph_digest = _sha256_hex(
-        _canonical_json({"rankmap": rankmap, "policy": job.placement_policy})
+        _canonical_json(
+            {
+                "rankmap": rankmap,
+                "policy": job.placement_policy,
+                "member_ids": member_ids,
+            }
+        )
     )
 
     existing = await get_placement(session, job.id)
@@ -897,7 +995,17 @@ async def advance_job_one_step(
 
     # Side effects on the status we just claimed.
     if nxt == JOB_STATUS_PROVISIONING:
-        await _place_job(session, job)
+        try:
+            await _place_job(session, job)
+        except JobError as exc:
+            # Fabric admission failures (VAL-FAB-002/011) → terminal failed.
+            job.status = JOB_STATUS_FAILED
+            job.failure_code = exc.code
+            job.finished_at = utc_now()
+            job.updated_at = utc_now()
+            await session.commit()
+            await session.refresh(job)
+            return job
     if nxt == JOB_STATUS_RUNNING:
         job.started_at = job.started_at or utc_now()
         # Forced launch fail (VAL-JOB-018) before collect.

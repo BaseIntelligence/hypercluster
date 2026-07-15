@@ -98,6 +98,75 @@ async def list_fabric_reports(
     return list(result.scalars().all())
 
 
+async def load_latest_reports_for_nodes(
+    session: AsyncSession,
+    node_ids: list[str],
+) -> list[FabricReport]:
+    """Return latest FabricReport per node_id (VAL-FAB-010/011 rent/plan inputs).
+
+    Nodes without a stored scan synthesize a report from denormalized node IB
+    flags so require_ib can fail closed after inventory is stripped without a
+    prior full scan record.
+    """
+
+    reports: list[FabricReport] = []
+    for nid in node_ids:
+        row = await get_latest_fabric_report(session, nid)
+        if row is not None:
+            reports.append(_row_to_report(row))
+            continue
+        node = await get_node(session, nid)
+        if node is None:
+            continue
+        # Synthesize from inventory denormalization (has_ib / ib_devices).
+        try:
+            inventory = json.loads(node.inventory_json or "{}")
+        except (TypeError, ValueError):
+            inventory = {}
+        if not isinstance(inventory, dict):
+            inventory = {}
+        raw_devices = inventory.get("ib_devices")
+        devices: list[Any] = []
+        if isinstance(raw_devices, list):
+            for item in raw_devices:
+                if isinstance(item, dict):
+                    devices.append(item)
+                elif isinstance(item, str) and item.strip():
+                    # Inventory sometimes stores HCA names as bare strings.
+                    devices.append(
+                        {
+                            "name": item.strip(),
+                            "port": 1,
+                            "rate_gbps": float(node.ib_rate_gbps or 200.0),
+                            "state": "Active",
+                        }
+                    )
+        if not devices and node.has_ib:
+            rate = float(node.ib_rate_gbps or 200.0)
+            devices = [
+                {
+                    "name": "mlx5_0",
+                    "port": 1,
+                    "rate_gbps": rate,
+                    "state": "Active",
+                }
+            ]
+        # Empty devices when no IB → eth inventory for require_ib checks.
+        reports.append(
+            build_fabric_report(
+                node_id=nid,
+                collected_at=node.updated_at or utc_now(),
+                ib_devices=devices if node.has_ib else [],
+                ib_rate_gbps=float(node.ib_rate_gbps) if node.ib_rate_gbps else None,
+                eth_ifaces=list(inventory.get("eth_ifaces") or ["eth0"]),
+                gpu_count=int(node.gpu_count or 0),
+                gpu_gpu_topo_matrix=str(inventory.get("gpu_gpu_topo_matrix") or ""),
+                source="inject",
+            )
+        )
+    return reports
+
+
 async def persist_fabric_report(
     session: AsyncSession,
     report: FabricReport,
@@ -277,6 +346,7 @@ __all__ = [
     "fabric_scan_node",
     "get_latest_fabric_report",
     "list_fabric_reports",
+    "load_latest_reports_for_nodes",
     "persist_fabric_report",
     "report_to_public",
 ]

@@ -204,6 +204,37 @@ async def rent_offer(
                     status_code=409,
                 )
 
+    # VAL-FAB-010: re-authenticate require_ib against latest fabric reports /
+    # denormalized IB flags so stripped IB re-report cannot be rented.
+    if int(getattr(offer, "require_ib", 0) or 0) == 1:
+        from hypercluster.domain.fabric_reports import load_latest_reports_for_nodes
+        from hypercluster.domain.nodes import node_has_ib
+        from hypercluster.fabric.gates import evaluate_require_ib_nodes
+
+        # Fast path: denormalized has_ib flags (updated by fabric-scan).
+        eth_only = [n.id for n in nodes if not node_has_ib(n)]
+        if eth_only:
+            raise LeaseError(
+                "require_ib_not_satisfied",
+                (
+                    "require_ib offer blocked: node(s) lack InfiniBand after "
+                    f"updated inventory: {', '.join(eth_only)}"
+                ),
+                status_code=409,
+            )
+        reports = await load_latest_reports_for_nodes(session, [n.id for n in nodes])
+        check = evaluate_require_ib_nodes(
+            require_ib=True,
+            reports=reports,
+            node_ids=[n.id for n in nodes],
+        )
+        if not check.may_rent:
+            raise LeaseError(
+                check.failure_code or "require_ib_not_satisfied",
+                check.reason or "require_ib fabric consistency failed",
+                status_code=409,
+            )
+
     await _assert_nodes_exclusive_free(session, nodes)
 
     now = utc_now()

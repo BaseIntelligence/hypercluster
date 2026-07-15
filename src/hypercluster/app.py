@@ -27,18 +27,41 @@ async def _scaffold_combined_worker_loop(
     *,
     interval_seconds: float = 5.0,
 ) -> None:
-    """Lightweight combined-mode loop until real queue/worker lands.
+    """Combined-mode loop: drain job lifecycle (place/launch/collect/score).
 
-    Keeps the SDK `worker` readiness probe green while the process is up.
-    Later milestones replace this with marketplace/job/weight drain loops.
+    Keeps the SDK `worker` readiness probe green while advancing admitted
+    jobs under local sim (VAL-JOB-006/017). Interval and sim run sleep come
+    from HyperSettings on app.state.
     """
 
     interval = interval_seconds if interval_seconds >= 0.05 else 0.05
     try:
         while True:
+            await _drain_job_lifecycle(app)
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         raise
+
+
+async def _drain_job_lifecycle(app: FastAPI) -> None:
+    """Run one job-lifecycle drain tick against app.state.database."""
+
+    from hypercluster.domain.job_lifecycle import drain_jobs_once
+
+    database = getattr(app.state, "database", None)
+    if database is None:
+        return
+    hyper = getattr(app.state, "hyper_settings", None)
+    run_sleep = 0.0
+    if hyper is not None:
+        run_sleep = float(getattr(hyper, "sim_job_run_sleep_s", 0.0) or 0.0)
+    try:
+        async with database.session() as session:
+            await drain_jobs_once(session, run_sleep_s=run_sleep, limit=16)
+    except Exception:  # noqa: BLE001 — never crash the worker loop
+        import logging
+
+        logging.getLogger(__name__).exception("combined worker job drain failed")
 
 
 def create_app(

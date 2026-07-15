@@ -16,6 +16,17 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from hypercluster.api.auth import DbSession, RequireMiner
+from hypercluster.domain.job_lifecycle import (
+    attempt_to_public,
+    cancel_job,
+    get_attempt,
+    get_fabric_report,
+    get_latest_attempt,
+    get_placement,
+    get_proofs_for_attempt,
+    job_detail_public,
+    post_job_results,
+)
 from hypercluster.domain.jobs import (
     JobError,
     admit_job,
@@ -136,6 +147,24 @@ class JobAdmitRequest(BaseModel):
     placement_policy: str = Field(default="pack", max_length=16)
     lease_id: str | None = Field(default=None, max_length=36)
     pod_id: str | None = Field(default=None, max_length=36)
+
+
+class JobCancelRequest(BaseModel):
+    reason: str | None = Field(default="user_cancel", max_length=256)
+
+
+class JobResultsRequest(BaseModel):
+    """Provider/worker result envelope (VAL-JOB-009 attempt-keyed)."""
+
+    attempt_no: int = Field(default=1, ge=1)
+    status: str = Field(default="succeeded", max_length=32)
+    metrics: dict[str, Any] | None = None
+    fabric_report_digest: str | None = Field(default=None, max_length=128)
+    output_digest: str | None = Field(default=None, max_length=128)
+    proof_tier: str = Field(default="sim", max_length=32)
+    verified: bool = True
+    verify_mode: str = Field(default="sim", max_length=32)
+    failure_code: str | None = Field(default=None, max_length=64)
 
 
 def _header_hotkey(request: Request) -> str | None:
@@ -656,7 +685,7 @@ async def jobs_get(
     job_id: str,
     session: DbSession,
 ) -> dict[str, Any]:
-    """Job detail by id (admit-phase shape; lifecycle fields expand in M3)."""
+    """Job detail: status, placement, proofs summary, no secrets (VAL-JOB-010/026)."""
 
     job = await get_job(session, job_id)
     if job is None:
@@ -664,7 +693,124 @@ async def jobs_get(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "job_not_found", "message": "job not found"},
         )
+    placement = await get_placement(session, job_id)
+    attempt = await get_latest_attempt(session, job_id)
+    proofs = await get_proofs_for_attempt(session, attempt.id) if attempt is not None else []
+    fabric = await get_fabric_report(session, job_id)
+    return job_detail_public(
+        job,
+        placement=placement,
+        attempt=attempt,
+        proofs=proofs,
+        fabric_report=fabric,
+    )
+
+
+@public_route(tags=["jobs"])
+@router.post("/v1/jobs/{job_id}/cancel", status_code=status.HTTP_200_OK)
+async def jobs_cancel(
+    job_id: str,
+    identity: RequireMiner,
+    session: DbSession,
+    body: JobCancelRequest | None = None,
+) -> dict[str, Any]:
+    """Cancel non-terminal job as submitter (VAL-JOB-007)."""
+
+    _ = body  # reason reserved for audit trail later
+    try:
+        job = await cancel_job(session, job_id=job_id, hotkey=identity.hotkey)
+    except JobError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     return job_to_public(job)
+
+
+@public_route(tags=["jobs"])
+@router.get("/v1/jobs/{job_id}/attempts/{attempt_no}")
+async def jobs_attempt_get(
+    job_id: str,
+    attempt_no: int,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Attempt detail + metrics digests (VAL-JOB-011)."""
+
+    job = await get_job(session, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "job_not_found", "message": "job not found"},
+        )
+    attempt = await get_attempt(session, job_id, attempt_no)
+    if attempt is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "attempt_not_found", "message": "attempt not found"},
+        )
+    return attempt_to_public(attempt)
+
+
+@public_route(tags=["jobs"])
+@router.get("/v1/jobs/{job_id}/fabric-report")
+async def jobs_fabric_report(
+    job_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """FabricReport view for multi-node sim jobs (VAL-JOB-021)."""
+
+    job = await get_job(session, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "job_not_found", "message": "job not found"},
+        )
+    report = await get_fabric_report(session, job_id)
+    if report is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "fabric_report_not_ready",
+                "message": "fabric report not available yet (collect not finished)",
+            },
+        )
+    return report.to_dict()
+
+
+@public_route(tags=["jobs"])
+@router.post("/v1/jobs/{job_id}/results", status_code=status.HTTP_200_OK)
+async def jobs_post_results(
+    job_id: str,
+    identity: RequireMiner,
+    session: DbSession,
+    body: JobResultsRequest,
+) -> dict[str, Any]:
+    """Provider/worker result envelope; attempt-keyed idempotent (VAL-JOB-009)."""
+
+    try:
+        attempt, created = await post_job_results(
+            session,
+            job_id=job_id,
+            attempt_no=body.attempt_no,
+            status=body.status,
+            metrics=body.metrics,
+            fabric_report_digest=body.fabric_report_digest,
+            output_digest=body.output_digest,
+            proof_tier=body.proof_tier,
+            verified=body.verified,
+            verify_mode=body.verify_mode,
+            failure_code=body.failure_code,
+            actor_hotkey=identity.hotkey,
+        )
+    except JobError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    payload = attempt_to_public(attempt)
+    payload["created"] = created
+    payload["attempt"] = attempt_to_public(attempt)
+    return payload
 
 
 @public_route(tags=["scoring"])
@@ -676,8 +822,12 @@ async def leaderboard() -> dict[str, list[object]]:
 
 
 __all__ = [
+    "jobs_attempt_get",
+    "jobs_cancel",
     "jobs_create",
+    "jobs_fabric_report",
     "jobs_get",
+    "jobs_post_results",
     "leaderboard",
     "leases_get",
     "leases_list",

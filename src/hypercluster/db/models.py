@@ -489,6 +489,235 @@ class Job(Base):
         }
 
 
+class JobPlacement(Base):
+    """Topology-aware rankmap + NCCL env for a job (architecture §3.1 / §8.2)."""
+
+    __tablename__ = "job_placements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    rankmap_json: Mapped[str] = mapped_column(Text, nullable=False)
+    placement_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="pack")
+    nccl_env_json: Mapped[str] = mapped_column(Text, nullable=False)
+    planner_version: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="fabric-planner.v1",
+    )
+    # Launch contract merge (entrypoint + env + NCCL + image) for observability.
+    launch_contract_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    graph_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    def rankmap(self) -> list[Any]:
+        try:
+            raw = json.loads(self.rankmap_json)
+        except (TypeError, ValueError):
+            return []
+        return raw if isinstance(raw, list) else []
+
+    def nccl_env(self) -> dict[str, str]:
+        try:
+            raw = json.loads(self.nccl_env_json)
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): str(v) for k, v in raw.items()}
+
+    def launch_contract(self) -> dict[str, Any] | None:
+        if not self.launch_contract_json:
+            return None
+        try:
+            raw = json.loads(self.launch_contract_json)
+        except (TypeError, ValueError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "job_id": self.job_id,
+            "rankmap": self.rankmap(),
+            "placement_policy": self.placement_policy,
+            "nccl_env": self.nccl_env(),
+            "planner_version": self.planner_version,
+            "launch_contract": self.launch_contract(),
+            "graph_digest": self.graph_digest,
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
+class JobAttempt(Base):
+    """Single launch attempt for a job (unique job_id + attempt_no)."""
+
+    __tablename__ = "job_attempts"
+    __table_args__ = (
+        UniqueConstraint("job_id", "attempt_no", name="uq_job_attempts_job_attempt_no"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    launcher_log_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    fabric_report_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metrics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Fingerprint of for provider result envelope (idempotent re-post).
+    result_digest: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    launch_contract_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def metrics(self) -> dict[str, Any] | None:
+        if not self.metrics_json:
+            return None
+        try:
+            raw = json.loads(self.metrics_json)
+        except (TypeError, ValueError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
+    def launch_contract(self) -> dict[str, Any] | None:
+        if not self.launch_contract_json:
+            return None
+        try:
+            raw = json.loads(self.launch_contract_json)
+        except (TypeError, ValueError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "job_id": self.job_id,
+            "attempt_no": int(self.attempt_no),
+            "status": self.status,
+            "launcher_log_uri": self.launcher_log_uri,
+            "fabric_report_digest": self.fabric_report_digest,
+            "metrics": self.metrics(),
+            "output_digest": self.output_digest,
+            "result_digest": self.result_digest,
+            "failure_code": self.failure_code,
+            "launch_contract": self.launch_contract(),
+            "started_at": isoformat_utc(self.started_at),
+            "finished_at": isoformat_utc(self.finished_at),
+        }
+
+
+class JobProof(Base):
+    """Execution / TEE proof attached to an attempt (secrets never stored here)."""
+
+    __tablename__ = "job_proofs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("job_attempts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    proof_tier: Mapped[str] = mapped_column(String(32), nullable=False, default="sim")
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    tdx_quote_b64: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gpu_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dstack_verdict_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verified: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    verify_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="sim")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    def to_public_summary(self) -> dict[str, Any]:
+        """Summary shape without raw quotes or secret material."""
+
+        return {
+            "id": self.id,
+            "attempt_id": self.attempt_id,
+            "proof_tier": self.proof_tier,
+            "verified": bool(self.verified),
+            "verify_mode": self.verify_mode,
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
+class JobFabricReport(Base):
+    """Per-job fabric report view (sim multi-node digests; architecture §8.1)."""
+
+    __tablename__ = "job_fabric_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        unique=True,
+    )
+    attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    ib_devices_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    ib_rate_gbps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gpu_topo_sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    numa_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    nccl_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    report_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        try:
+            ib_devices = json.loads(self.ib_devices_json)
+        except (TypeError, ValueError):
+            ib_devices = []
+        numa_map: Any = None
+        if self.numa_map_json:
+            try:
+                numa_map = json.loads(self.numa_map_json)
+            except (TypeError, ValueError):
+                numa_map = self.numa_map_json
+        return {
+            "id": self.id,
+            "job_id": self.job_id,
+            "attempt_id": self.attempt_id,
+            "collected_at": isoformat_utc(self.collected_at),
+            "ib_devices": ib_devices if isinstance(ib_devices, list) else [],
+            "ib_rate_gbps": self.ib_rate_gbps,
+            "gpu_topo_sha256": self.gpu_topo_sha256,
+            "numa_map": numa_map,
+            "nccl_version": self.nccl_version,
+            "report_digest": self.report_digest,
+            "fabric_report_digest": self.report_digest,
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
 class RequestNonce(Base):
     """Replay protection for signed miner requests."""
 
@@ -509,6 +738,10 @@ class RequestNonce(Base):
 
 __all__ = [
     "Job",
+    "JobAttempt",
+    "JobFabricReport",
+    "JobPlacement",
+    "JobProof",
     "Lease",
     "Node",
     "Offer",

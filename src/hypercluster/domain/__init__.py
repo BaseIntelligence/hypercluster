@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from hypercluster.domain.job_lifecycle import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_SUCCEEDED,
+    JOB_STATUS_TIMEOUT,
+    TERMINAL_STATUSES,
+    cancel_job,
+    drain_jobs_once,
+)
 from hypercluster.domain.jobs import (
     JOB_STATUS_ADMITTED,
     JobError,
@@ -50,14 +58,20 @@ __all__ = [
     "DEFAULT_MAX_OFFER_PRICE_PER_HOUR",
     "DEFAULT_NODE_LIVENESS_SECONDS",
     "JOB_STATUS_ADMITTED",
+    "JOB_STATUS_CANCELLED",
+    "JOB_STATUS_SUCCEEDED",
+    "JOB_STATUS_TIMEOUT",
     "OFFER_STATUS_LISTED",
     "OFFER_STATUS_WITHDRAWN",
+    "TERMINAL_STATUSES",
     "JobError",
     "NodeError",
     "OfferError",
     "ProviderError",
     "admit_job",
+    "cancel_job",
     "create_offer",
+    "drain_jobs_once",
     "get_job",
     "get_node",
     "get_offer",

@@ -79,6 +79,10 @@ class HyperSettings(BaseSettings):
     max_job_nproc_per_node: int = Field(default=8, ge=1)
     max_job_timeout_s: int = Field(default=86400, ge=1)
     max_job_gpu_budget: int = Field(default=128, ge=1)
+    # Local sim job lifecycle (VAL-JOB-006/008). Zero delays for unit tests;
+    # combined worker applies run sleep so cancel/timeout races are testable.
+    sim_job_step_delay_s: float = Field(default=0.0, ge=0.0)
+    sim_job_run_sleep_s: float = Field(default=0.0, ge=0.0)
 
 
 @lru_cache(maxsize=1)

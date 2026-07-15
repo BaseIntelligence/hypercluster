@@ -346,6 +346,11 @@ def register_nodes_mutate(nodes_app: typer.Typer) -> None:
         hostname: str | None = typer.Option(None, "--hostname"),
         tee: str = typer.Option("none", "--tee", help="tee_capability"),
         ib: bool = typer.Option(False, "--ib", help="Mark inventory IB-capable"),
+        display_name: str | None = typer.Option(
+            None,
+            "--display-name",
+            help="Provider display name (auto-registers provider when missing)",
+        ),
         reg_hotkey: str | None = typer.Option(None, "--hotkey"),
         token: str | None = typer.Option(None, "--token"),
         url: str | None = url_option(),
@@ -353,10 +358,28 @@ def register_nodes_mutate(nodes_app: typer.Typer) -> None:
         port: int | None = typer.Option(None, help="API port when --url omitted"),
         as_json: bool = json_option(),
     ) -> None:
-        """Register a provider node (signed). Incomplete auth rejected."""
+        """Register a provider node (signed). Incomplete auth rejected.
+
+        Ensures the provider hotkey is onboarded first (VAL-CLI-007 / VAL-MKT-004)
+        so ``nodes register`` is a true one-shot CLI path without a separate
+        provider subcommand.
+        """
 
         hotkey, secret = require_mutate_auth(hotkey=reg_hotkey, token=token)
         base = resolve_base_url(url, host, port)
+        # Auto-register provider (idempotent) so register works without prior setup.
+        provider_body: dict[str, Any] = {
+            "display_name": display_name or f"provider-{hotkey[:12]}",
+        }
+        http_request(
+            "POST",
+            f"{base}/v1/providers/register",
+            json_body=provider_body,
+            signed=True,
+            hotkey=hotkey,
+            token=secret,
+            expect_statuses={200, 201},
+        )
         inventory: dict[str, Any] = {}
         if ib:
             inventory["ib_devices"] = [{"name": "mlx5_0", "port": 1, "rate_gbps": 100.0}]
@@ -635,17 +658,97 @@ def jobs_logs_cmd(
     port: int | None = typer.Option(None, help="API port when --url omitted"),
     as_json: bool = json_option(),
 ) -> None:
-    """Show attempt metrics digests / safe log excerpts (no secrets)."""
+    """Show attempt digests / safe log URIs without flooding secrets (VAL-CLI-009).
+
+    Pre-collect (404 attempt_not_found) exits non-zero with a clear message —
+    never dumps binary garbage or private material.
+    """
 
     base = resolve_base_url(url, host, port)
     response = http_request(
         "GET",
         f"{base}/v1/jobs/{job_id}/attempts/{attempt}",
-        expect_statuses={200},
+        # 404 => pre-collect empty / unknown attempt handled below.
+        expect_statuses=None,
     )
+    if response.status_code == 404:
+        typer.echo(
+            f"logs empty: job_id={job_id} attempt={attempt} not ready "
+            f"(collect not finished or unknown job/attempt)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        typer.echo(
+            f"API error {response.status_code} for logs job_id={job_id}: {response.text[:400]}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     payload = parse_json_response(response)
-    emit(payload, as_json=as_json, human_line=f"job_id={job_id} attempt={attempt}")
+    # Redact any accidental secret-ish keys if present in metrics/contract.
+    safe = _safe_logs_payload(payload if isinstance(payload, dict) else {"raw": payload})
+    if as_json:
+        emit(safe, as_json=True)
+    else:
+        digest_line = (
+            f"job_id={job_id} attempt={attempt} "
+            f"status={safe.get('status')} "
+            f"output_digest={safe.get('output_digest')} "
+            f"fabric_report_digest={safe.get('fabric_report_digest')} "
+            f"launcher_log_uri={safe.get('launcher_log_uri')}"
+        )
+        emit(safe, as_json=False, human_line=digest_line)
     raise typer.Exit(code=0)
+
+
+_SECRET_KEY_HINTS = (
+    "password",
+    "secret",
+    "private_key",
+    "ssh_private",
+    "token",
+    "authorization",
+    "wallet",
+)
+
+
+def _safe_logs_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project attempt payload to digests/excerpts; strip secret-looking keys."""
+
+    def _scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            out: dict[str, Any] = {}
+            for key, item in value.items():
+                lowered = str(key).lower()
+                if any(h in lowered for h in _SECRET_KEY_HINTS):
+                    out[key] = "***redacted***"
+                else:
+                    out[key] = _scrub(item)
+            return out
+        if isinstance(value, list):
+            return [_scrub(item) for item in value]
+        if isinstance(value, (bytes, bytearray)):
+            return f"<bytes:{len(value)}>"
+        if isinstance(value, str) and "\x00" in value:
+            return f"<binary-text:{len(value)}>"
+        return value
+
+    preferred = {
+        "id": payload.get("id"),
+        "job_id": payload.get("job_id"),
+        "attempt_no": payload.get("attempt_no"),
+        "status": payload.get("status"),
+        "launcher_log_uri": payload.get("launcher_log_uri"),
+        "fabric_report_digest": payload.get("fabric_report_digest"),
+        "output_digest": payload.get("output_digest"),
+        "result_digest": payload.get("result_digest"),
+        "failure_code": payload.get("failure_code"),
+        "metrics": _scrub(payload.get("metrics")),
+        "started_at": payload.get("started_at"),
+        "finished_at": payload.get("finished_at"),
+    }
+    # Drop Nones for a compact operator-readable view.
+    return {k: v for k, v in preferred.items() if v is not None}
 
 
 __all__ = [

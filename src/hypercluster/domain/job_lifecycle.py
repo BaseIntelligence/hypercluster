@@ -592,6 +592,55 @@ async def post_job_results(
         # but seal metrics on the attempt.
         pass
 
+    # Seal demand score when results arrive with integrity inject or failed verified
+    # before the worker collects (VAL-CROSS-025). Score composite 0 on cheat codes.
+    integrity_codes: list[str] = []
+    metrics_for_score = metrics or {}
+    for key in ("integrity_codes", "reason_codes"):
+        raw = metrics_for_score.get(key)
+        if isinstance(raw, list):
+            for item in raw:
+                s = str(item)
+                if s not in integrity_codes:
+                    integrity_codes.append(s)
+    if failure_code and failure_code not in integrity_codes:
+        # Known cheat catalogue only — timeout/failed operational codes stay separate.
+        from hypercluster.domain.scoring import CHEAT_REASON_CODES
+
+        if failure_code in CHEAT_REASON_CODES:
+            integrity_codes.append(failure_code)
+    integrity_flag = (
+        (not verified)
+        or bool(metrics_for_score.get("integrity_fail"))
+        or bool(integrity_codes)
+    )
+    if integrity_flag or status != "succeeded":
+        try:
+            from hypercluster.domain.tee_proofs import score_attempt_with_tee
+
+            correctness = 0.0 if integrity_flag or status != "succeeded" else 1.0
+            efficiency = float(metrics_for_score.get("efficiency", 0.0) or 0.0)
+            fabric_gate = 0.0 if integrity_flag else float(
+                metrics_for_score.get("fabric_gate", 1.0) or 1.0
+            )
+            await score_attempt_with_tee(
+                session,
+                job=job,
+                attempt=attempt,
+                correctness=correctness,
+                efficiency=efficiency,
+                fabric_gate=fabric_gate,
+                integrity_fail=integrity_flag,
+                details={
+                    "integrity_codes": integrity_codes,
+                    "reason_codes": integrity_codes,
+                    "sealed_on_results": True,
+                    "results_status": status,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("results score seal failed for job %s", job_id)
+
     try:
         await session.commit()
     except IntegrityError:
@@ -965,17 +1014,74 @@ async def _collect_success(
             )
         from hypercluster.domain.tee_proofs import ensure_attempt_proof, score_attempt_with_tee
 
+        # VAL-CROSS-025: honour integrity fail sealed on early results and
+        # launcher honesty flags so mid-chain cheats never arrive at positive mass.
+        integrity_zero = bool(launch_result.integrity_fail) or (
+            attempt.failure_code
+            in {
+                "rank_desync",
+                "image_mutation",
+                "image_compose_mutation",
+                "inventory_spoof",
+                "integrity_fail",
+                "attestation_fail",
+            }
+        )
         proofs = await get_proofs_for_attempt(session, attempt.id)
         if not proofs:
-            await ensure_attempt_proof(session, job=job, attempt=attempt)
+            await ensure_attempt_proof(
+                session,
+                job=job,
+                attempt=attempt,
+                integrity_fail=integrity_zero,
+                fabric_gate=(
+                    0.0
+                    if integrity_zero
+                    else float(getattr(launch_result, "fabric_gate", 1.0) or 1.0)
+                ),
+            )
+        integrity_codes: list[str] = list(
+            (launch_result.score_factors or {}).get("reason_codes") or []
+        )
+        if integrity_zero and attempt.failure_code:
+            code = str(attempt.failure_code)
+            if code not in integrity_codes:
+                integrity_codes.append(code)
+        metrics_blob: dict[str, Any] = {}
+        if attempt.metrics_json:
+            try:
+                parsed_m = json.loads(attempt.metrics_json)
+                if isinstance(parsed_m, dict):
+                    metrics_blob = parsed_m
+            except (TypeError, ValueError):
+                metrics_blob = {}
+        for key in ("integrity_codes", "reason_codes"):
+            raw = metrics_blob.get(key)
+            if isinstance(raw, list):
+                for item in raw:
+                    if str(item) not in integrity_codes:
+                        integrity_codes.append(str(item))
+        if metrics_blob.get("integrity_fail") or metrics_blob.get("rank_desync"):
+            integrity_zero = True
+            if "rank_desync" not in integrity_codes and metrics_blob.get("rank_desync"):
+                integrity_codes.append("rank_desync")
+            if "integrity_fail" not in integrity_codes:
+                integrity_codes.append("integrity_fail")
+        efficiency = 1.0
+        if isinstance(metrics_blob.get("efficiency"), (int, float)):
+            efficiency = float(metrics_blob["efficiency"])
+        fabric_gate = 0.0 if integrity_zero else float(
+            metrics_blob.get("fabric_gate", getattr(launch_result, "fabric_gate", 1.0)) or 1.0
+        )
         await score_attempt_with_tee(
             session,
             job=job,
             attempt=attempt,
-            correctness=1.0,
-            efficiency=1.0,
-            fabric_gate=1.0,
+            correctness=0.0 if integrity_zero else 1.0,
+            efficiency=efficiency,
+            fabric_gate=fabric_gate,
             hyper=hyper,
+            integrity_fail=integrity_zero,
             details={
                 "graph_digest": graph_digest,
                 "fabric_artifact_digest": launch_result.fabric_artifact_digest,
@@ -985,6 +1091,8 @@ async def _collect_success(
                 "launcher_version": launch_result.launcher_version,
                 "rankmap_len": len(rankmap),
                 "sealed_early": True,
+                "integrity_codes": integrity_codes,
+                "reason_codes": integrity_codes,
             },
         )
         return
@@ -1010,6 +1118,28 @@ async def _collect_success(
         job.status = JOB_STATUS_TIMEOUT
         job.failure_code = "timeout"
         job.finished_at = utc_now()
+        # VAL-CROSS-016: timeout is non-success; seal composite 0 score if possible.
+        try:
+            from hypercluster.domain.tee_proofs import score_attempt_with_tee
+
+            await score_attempt_with_tee(
+                session,
+                job=job,
+                attempt=attempt,
+                correctness=0.0,
+                efficiency=0.0,
+                fabric_gate=0.0,
+                hyper=hyper,
+                integrity_fail=False,
+                details={
+                    "reason_codes": ["timeout"],
+                    "non_success": True,
+                    "terminal": "timeout",
+                    "fabric_report_digest": fab.get("report_digest"),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("timeout score seal failed (launch) for job %s", job.id)
         return
 
     metrics = launch_result.metrics_json()
@@ -1143,16 +1273,51 @@ async def should_timeout(job: Job, *, now: datetime | None = None) -> bool:
 
 
 async def mark_timeout(session: AsyncSession, job: Job) -> Job:
+    """Terminal timeout with non-success score (VAL-JOB-008 / VAL-CROSS-016)."""
+
     now = utc_now()
     job.status = JOB_STATUS_TIMEOUT
     job.failure_code = "timeout"
     job.finished_at = now
     job.updated_at = now
     attempt = await get_latest_attempt(session, job.id)
-    if attempt is not None and not is_terminal(attempt.status):
+    if attempt is None:
+        attempt = JobAttempt(
+            id=str(uuid.uuid4()),
+            job_id=job.id,
+            attempt_no=1,
+            status=JOB_STATUS_TIMEOUT,
+            started_at=job.started_at or now,
+            finished_at=now,
+            failure_code="timeout",
+        )
+        session.add(attempt)
+        await session.flush()
+    elif not is_terminal(attempt.status):
         attempt.status = JOB_STATUS_TIMEOUT
         attempt.failure_code = "timeout"
         attempt.finished_at = now
+    # Timeout must never score as demand success (composite / mass stay 0).
+    try:
+        from hypercluster.domain.tee_proofs import score_attempt_with_tee
+
+        await score_attempt_with_tee(
+            session,
+            job=job,
+            attempt=attempt,
+            correctness=0.0,
+            efficiency=0.0,
+            fabric_gate=0.0,
+            integrity_fail=False,
+            details={
+                "reason_codes": ["timeout"],
+                "integrity_codes": [],
+                "non_success": True,
+                "terminal": "timeout",
+            },
+        )
+    except Exception:  # noqa: BLE001 — scoring must not block timeout terminal
+        logger.exception("timeout score seal failed for job %s", job.id)
     await session.commit()
     await session.refresh(job)
     return job

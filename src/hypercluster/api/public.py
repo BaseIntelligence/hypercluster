@@ -179,6 +179,18 @@ class IdleReclaimRequest(BaseModel):
     age_heartbeats_seconds: int | None = Field(default=None, ge=0, le=86_400_000)
 
 
+class DrainModeRequest(BaseModel):
+    """Sim/ops drain toggle (VAL-CROSS-026).
+
+    When ``draining=true``, the required ``not_draining`` readiness probe fails
+    so ``GET /ready`` returns 503 and the SDK mutation middleware rejects new
+    writes with ``runtime_not_ready``. Combined worker continues finishing
+    in-flight jobs from SQLite.
+    """
+
+    draining: bool = True
+
+
 class JobResultsRequest(BaseModel):
     """Provider/worker result envelope (VAL-JOB-009 attempt-keyed).
 
@@ -197,6 +209,8 @@ class JobResultsRequest(BaseModel):
     verified: bool = True
     verify_mode: str = Field(default="sim", max_length=32)
     failure_code: str | None = Field(default=None, max_length=64)
+    # Optional integrity inject codes (VAL-CROSS-025) — seals composite 0.
+    integrity_codes: list[str] | None = None
     # Optional offline TEE material.
     quote_b64: str | None = None
     gpu_evidence: dict[str, Any] | None = None
@@ -900,19 +914,62 @@ async def jobs_post_results(
 ) -> dict[str, Any]:
     """Provider/worker result envelope; attempt-keyed idempotent (VAL-JOB-009)."""
 
+    # Merge integrity_codes into metrics so lifecycle + scoring see cheat inject.
+    metrics = dict(body.metrics or {})
+    if body.integrity_codes:
+        existing_codes = metrics.get("integrity_codes")
+        merged: list[str] = []
+        if isinstance(existing_codes, list):
+            merged.extend(str(c) for c in existing_codes)
+        for code in body.integrity_codes:
+            if str(code) not in merged:
+                merged.append(str(code))
+        metrics["integrity_codes"] = merged
+        metrics["reason_codes"] = list(
+            dict.fromkeys(
+                [
+                    *(
+                        str(c)
+                        for c in (metrics.get("reason_codes") or [])
+                        if isinstance(metrics.get("reason_codes"), list)
+                    ),
+                    *merged,
+                ]
+            )
+        )
+        if any(
+            c
+            in {
+                "rank_desync",
+                "image_mutation",
+                "image_compose_mutation",
+                "inventory_spoof",
+                "integrity_fail",
+                "attestation_fail",
+            }
+            for c in merged
+        ):
+            metrics["integrity_fail"] = True
+            if "rank_desync" in merged:
+                metrics["rank_desync"] = True
+    # Prefer explicit failure_code; else first integrity code when present.
+    failure_code = body.failure_code
+    if not failure_code and body.integrity_codes:
+        failure_code = str(body.integrity_codes[0])
+
     try:
         attempt, created = await post_job_results(
             session,
             job_id=job_id,
             attempt_no=body.attempt_no,
             status=body.status,
-            metrics=body.metrics,
+            metrics=metrics,
             fabric_report_digest=body.fabric_report_digest,
             output_digest=body.output_digest,
             proof_tier=body.proof_tier,
-            verified=body.verified,
+            verified=body.verified and not bool(metrics.get("integrity_fail")),
             verify_mode=body.verify_mode,
-            failure_code=body.failure_code,
+            failure_code=failure_code,
             actor_hotkey=identity.hotkey,
         )
     except JobError as exc:
@@ -1115,6 +1172,39 @@ async def sim_idle_reclaim(
     }
 
 
+@public_route(tags=["sim"])
+@router.post("/v1/sim/drain", status_code=status.HTTP_200_OK)
+async def sim_set_drain(
+    request: Request,
+    body: DrainModeRequest | None = None,
+) -> dict[str, Any]:
+    """Toggle drain mode for READY 503 semantics (VAL-CROSS-026).
+
+    In-flight jobs keep advancing via the combined worker; new POSTs are
+    refused by the Base SDK `runtime_not_ready` middleware while ready=false.
+    """
+
+    from hypercluster.app import is_draining, set_draining
+
+    req = body if body is not None else DrainModeRequest(draining=True)
+    draining = set_draining(request.app, bool(req.draining))
+    return {
+        "ok": True,
+        "draining": draining,
+        "was_draining": is_draining(request.app) if draining else False,
+    }
+
+
+@public_route(tags=["sim"])
+@router.get("/v1/sim/drain")
+async def sim_get_drain(request: Request) -> dict[str, Any]:
+    """Report drain flag (diagnostic surface for cross scenarios)."""
+
+    from hypercluster.app import is_draining
+
+    return {"ok": True, "draining": is_draining(request.app)}
+
+
 __all__ = [
     "jobs_attempt_get",
     "jobs_cancel",
@@ -1146,5 +1236,7 @@ __all__ = [
     "providers_me",
     "providers_register",
     "router",
+    "sim_get_drain",
     "sim_idle_reclaim",
+    "sim_set_drain",
 ]

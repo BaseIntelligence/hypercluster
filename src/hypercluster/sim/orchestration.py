@@ -269,6 +269,31 @@ def run_cross_market_resilience_auth_bundle(
     )
 
 
+def run_cross_worker_durability_paths_bundle(
+    base_url: str,
+    *,
+    timeout: float = 60.0,
+    shared_token: str | None = None,
+    restart_fn: Any | None = None,
+    include_restart: bool = True,
+    **kwargs: Any,
+) -> ScenarioResult:
+    """VAL-CROSS-014/015/016/017/025/026/028 combined worker durability paths."""
+
+    from hypercluster.sim.cross_worker_durability_paths import (
+        run_cross_worker_durability_paths,
+    )
+
+    _ = kwargs
+    return run_cross_worker_durability_paths(
+        base_url,
+        timeout=timeout,
+        shared_token=shared_token,
+        restart_fn=restart_fn,
+        include_restart=include_restart,
+    )
+
+
 __all__ = [
     "DEFAULT_SCENARIO_ORDER",
     "FABRIC_SCENARIOS",
@@ -278,6 +303,7 @@ __all__ = [
     "run_cross_happy_path_bundle",
     "run_cross_market_resilience_auth_bundle",
     "run_cross_multinode_fabric_tee_bundle",
+    "run_cross_worker_durability_paths_bundle",
     "run_fabric_bundle",
     "run_happy_path_bundle",
     "run_named_scenarios",

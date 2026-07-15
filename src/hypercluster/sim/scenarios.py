@@ -15,6 +15,10 @@ Market resilience (double-rent recover + idle protect + nonce refuse) lives in
 :mod:`hypercluster.sim.cross_market_resilience_auth` as
 ``cross-market-resilience-auth`` (VAL-CROSS-010/011/024).
 
+Worker durability (combined path / restart / timeout / cancel / drain / integrity)
+lives in :mod:`hypercluster.sim.cross_worker_durability_paths` as
+``cross-worker-durability-paths`` (VAL-CROSS-014..017/025/026/028).
+
 See hypercluster.sim.orchestration for the reusable multi-scenario suite runner.
 """
 
@@ -40,6 +44,7 @@ WEIGHTS = "weights"
 CROSS_HAPPY_PATH = "cross-happy-path"
 CROSS_MULTINODE = "cross-multinode-fabric-tee"
 CROSS_MARKET_RESILIENCE = "cross-market-resilience-auth"
+CROSS_WORKER_DURABILITY = "cross-worker-durability-paths"
 
 # Architecture §12.3 names remain the five canonical suite scenarios.
 KNOWN_SCENARIOS = (SMOKE, MARKETPLACE, NCCL, TEE_OFFLINE, WEIGHTS)
@@ -48,6 +53,7 @@ EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (
     CROSS_HAPPY_PATH,
     CROSS_MULTINODE,
     CROSS_MARKET_RESILIENCE,
+    CROSS_WORKER_DURABILITY,
 )
 
 # Deterministic local-sim hotkeys (not real ss58; HMAC insecure mode).
@@ -1375,6 +1381,22 @@ def run_scenario(
             timeout=max(timeout, 45.0),
             shared_token=shared_token,
         )
+    if key in {
+        CROSS_WORKER_DURABILITY,
+        "cross_worker_durability_paths",
+        "cross-worker-durability",
+        "worker-durability-paths",
+    }:
+        from hypercluster.sim.cross_worker_durability_paths import (
+            run_cross_worker_durability_paths,
+        )
+
+        return run_cross_worker_durability_paths(
+            base_url,
+            timeout=max(timeout, 60.0),
+            shared_token=shared_token,
+            include_restart=True,
+        )
     return ScenarioResult(
         name=key,
         ok=False,
@@ -1391,6 +1413,7 @@ __all__ = [
     "CROSS_HAPPY_PATH",
     "CROSS_MARKET_RESILIENCE",
     "CROSS_MULTINODE",
+    "CROSS_WORKER_DURABILITY",
     "EXTENDED_SCENARIOS",
     "KNOWN_SCENARIOS",
     "MARKETPLACE",

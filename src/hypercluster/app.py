@@ -7,6 +7,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 
 from base.challenge_sdk.app_factory import create_challenge_app
+from base.challenge_sdk.health import ReadinessProbe
 from fastapi import APIRouter, FastAPI
 
 from hypercluster.api.public import router as default_public_router
@@ -20,6 +21,38 @@ from hypercluster.settings import (
 from hypercluster.weights import bind_weights_runtime, get_weights
 
 BackgroundTaskFactory = Callable[[FastAPI], Coroutine[Any, Any, None]]
+
+
+def _make_drain_state() -> dict[str, bool]:
+    """Shared mutable drain flag (VAL-CROSS-026).
+
+    Typed as a plain dict so readiness probes can close over it before the
+    FastAPI app instance exists, then the same object is bound on ``app.state``.
+    """
+
+    return {"draining": False}
+
+
+def is_draining(app: FastAPI | None) -> bool:
+    """True when the challenge has entered drain mode (ready→503, refuse admits)."""
+
+    if app is None:
+        return False
+    flag = getattr(app.state, "drain_state", None)
+    if isinstance(flag, dict):
+        return bool(flag.get("draining"))
+    return bool(getattr(app.state, "draining", False))
+
+
+def set_draining(app: FastAPI, draining: bool) -> bool:
+    """Enter/leave drain mode. Returns the new draining value."""
+
+    value = bool(draining)
+    flag = getattr(app.state, "drain_state", None)
+    if isinstance(flag, dict):
+        flag["draining"] = value
+    app.state.draining = value
+    return value
 
 
 async def _scaffold_combined_worker_loop(
@@ -122,6 +155,7 @@ def create_app(
     app_settings = settings if settings is not None else get_settings()
     product = hyper_settings if hyper_settings is not None else get_hyper_settings()
     database = Database(app_settings.database_url)
+    drain_state = _make_drain_state()
 
     tasks: list[BackgroundTaskFactory]
     if background_tasks is not None:
@@ -157,18 +191,67 @@ def create_app(
 
         tasks = list(tasks) + [_push_loop]
 
+    def _not_draining() -> bool:
+        # VAL-CROSS-026: drain forces ready=false → mutations 503 /runtime_not_ready.
+        return not bool(drain_state.get("draining"))
+
+    readiness_probes = (
+        ReadinessProbe(name="not_draining", check=_not_draining, required=True),
+    )
+
     app = create_challenge_app(
         settings=app_settings,
         database=database,
         public_router=public_router if public_router is not None else default_public_router,
         get_weights_fn=get_weights,
         background_tasks=tuple(tasks),
+        readiness_probes=readiness_probes,
     )
     app.state.settings = app_settings
     app.state.hyper_settings = product
     app.state.database = database
     app.state.combined_worker_enabled = bool(tasks)
     app.state.weight_push_client = push_client
+    app.state.drain_state = drain_state
+    app.state.draining = False
+
+    # VAL-CROSS-026: while drained, the Base `runtime_not_ready` middleware
+    # refuses normal POSTs. Allow /v1/sim/drain itself so operators can leave
+    # drain and restore ready=true without restarting the process. Middleware
+    # added after create_challenge_app runs first on the request path.
+    from fastapi.responses import JSONResponse
+    from starlette.requests import Request as StarletteRequest
+
+    @app.middleware("http")
+    async def allow_sim_drain_while_unready(
+        request: StarletteRequest,
+        call_next: Callable[[StarletteRequest], Coroutine[Any, Any, Any]],
+    ) -> Any:
+        path = request.url.path.rstrip("/") or "/"
+        if path == "/v1/sim/drain":
+            if request.method == "GET":
+                return JSONResponse(
+                    {"ok": True, "draining": bool(drain_state.get("draining"))}
+                )
+            if request.method in {"POST", "PUT", "PATCH"}:
+                try:
+                    payload = await request.json()
+                except Exception:  # noqa: BLE001 — empty body = enter drain
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                new_value = bool(payload.get("draining", True))
+                drain_state["draining"] = new_value
+                app.state.draining = new_value
+                return JSONResponse(
+                    {
+                        "ok": True,
+                        "draining": new_value,
+                        "was_draining": new_value,
+                    }
+                )
+        return await call_next(request)
+
     return app
 
 
@@ -199,4 +282,10 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["create_app", "get_app", "reset_app_for_tests"]
+__all__ = [
+    "create_app",
+    "get_app",
+    "is_draining",
+    "reset_app_for_tests",
+    "set_draining",
+]

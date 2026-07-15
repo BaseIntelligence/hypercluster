@@ -5,6 +5,14 @@ Offline fixtures are CI-mandatory; live path is optional later.
 
 from __future__ import annotations
 
+from hypercluster.attest.compose_hash import (
+    GOLDEN_COMPOSE_HASH_RELPATH,
+    GOLDEN_COMPOSE_RELPATH,
+    ensure_golden_matches,
+    hash_compose_bytes,
+    hash_compose_file,
+    load_golden_hash_file,
+)
 from hypercluster.attest.gpu_evidence import (
     GPU_EVIDENCE_SCHEME,
     GpuEvidence,
@@ -40,6 +48,8 @@ from hypercluster.attest.verify import verify_offline_fixture_file, verify_tee
 
 __all__ = [
     "DEFAULT_COMPOSE_HASH_GOLDEN",
+    "GOLDEN_COMPOSE_HASH_RELPATH",
+    "GOLDEN_COMPOSE_RELPATH",
     "GPU_EVIDENCE_SCHEME",
     "OFFLINE_FIXTURE_KIND",
     "REPORT_DATA_SIZE",
@@ -54,6 +64,10 @@ __all__ = [
     "build_job_digest",
     "build_report_data",
     "default_policy_from_settings",
+    "ensure_golden_matches",
+    "hash_compose_bytes",
+    "hash_compose_file",
+    "load_golden_hash_file",
     "load_quote_fixture",
     "make_offline_envelope",
     "mock_gpu_evidence",

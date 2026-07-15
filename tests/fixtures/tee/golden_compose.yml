@@ -1,0 +1,11 @@
+# hypercluster TEE golden app-compose (offline CI fixture)
+# Deterministic sha256 source for `hypercluster attest compose-hash`.
+name: hypercluster-tee-golden
+services:
+  app:
+    image: hypercluster/tee-sim:0.1.0
+    environment:
+      HYPER_TEE_MODE: tdx
+      HYPERCLUSTER_JOB_ROLE: worker
+    gpus: all
+    restart: "no"

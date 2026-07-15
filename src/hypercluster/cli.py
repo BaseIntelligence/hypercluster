@@ -447,6 +447,79 @@ def fabric_plan_cmd(
     raise typer.Exit(code=0)
 
 
+@attest_app.command("compose-hash")
+def attest_compose_hash_cmd(
+    compose_file: Path = typer.Option(
+        ...,
+        "--compose-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to app-compose / compose YAML fixture to hash",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit JSON object with compose_hash + path (default: bare hash line)",
+    ),
+    check_golden: Path | None = typer.Option(
+        None,
+        "--check-golden",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Optional golden sha256 file; exit 1 on drift",
+    ),
+) -> None:
+    """Compute deterministic sha256 of a compose file (VAL-TEE-010).
+
+    Offline only — no network, no docker. Two runs over a fixed file yield
+    the same ``sha256:<hex>`` string. Optional ``--check-golden`` asserts
+    equality against a committed golden hash under tests/fixtures/tee.
+    """
+
+    from hypercluster.attest.compose_hash import (
+        hash_compose_file,
+        load_golden_hash_file,
+    )
+
+    try:
+        compose_hash = hash_compose_file(compose_file)
+    except OSError as exc:
+        typer.echo(f"compose-hash failed to read {compose_file}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if check_golden is not None:
+        try:
+            expected = load_golden_hash_file(check_golden)
+        except (OSError, ValueError) as exc:
+            typer.echo(f"compose-hash golden load failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        if compose_hash != expected:
+            typer.echo(
+                f"compose-hash drift: got={compose_hash} expected={expected}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "compose_hash": compose_hash,
+                    "compose_file": str(compose_file),
+                    "check_golden": str(check_golden) if check_golden else None,
+                    "ok": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    else:
+        typer.echo(compose_hash)
+    raise typer.Exit(code=0)
+
+
 @attest_app.command("verify-live")
 def attest_verify_live_cmd(
     endpoint: str | None = typer.Option(

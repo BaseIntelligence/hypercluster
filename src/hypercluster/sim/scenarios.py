@@ -1,7 +1,8 @@
-"""Local CI scenario runners (smoke + marketplace).
+"""Local CI scenario runners (smoke, marketplace, tee-offline).
 
 Architecture §12.3 names: smoke, marketplace, nccl, tee-offline, weights.
-M2 ships smoke (identity) and marketplace (offer/rent/terminate/double-rent).
+M2: smoke (identity) + marketplace (offer/rent/terminate/double-rent).
+M5: tee-offline (offline fixtures only; no TEE silicon / live network).
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -452,6 +454,262 @@ def _fail(
     )
 
 
+def _tee_fixture_root() -> Path:
+    """Locate tests/fixtures/tee from repo checkout or site-package layout."""
+
+    # Prefer walking up from this module to the monorepo root (src/hypercluster/sim).
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[3] / "tests" / "fixtures" / "tee",  # .../hypercluster/tests/...
+        here.parents[4] / "tests" / "fixtures" / "tee",
+        Path.cwd() / "tests" / "fixtures" / "tee",
+    ]
+    for c in candidates:
+        if c.is_dir() and (c / "positive_tdx_v1.json").is_file():
+            return c
+    # Last-ditch: env override for custom checkouts.
+    import os
+
+    env = (os.environ.get("HYPER_TEE_FIXTURE_DIR") or "").strip()
+    if env:
+        p = Path(env)
+        if p.is_dir():
+            return p
+    raise FileNotFoundError(
+        "tee fixtures not found under tests/fixtures/tee "
+        f"(searched {[str(c) for c in candidates]})"
+    )
+
+
+def run_tee_offline_scenario(
+    base_url: str,
+    *,
+    fixture_dir: str | Path | None = None,
+) -> ScenarioResult:
+    """CI tee-offline: compose-hash golden + positive/negative fixture verify.
+
+    Fully offline — no GPU/TEE silicon and no live dstack-verifier network
+    (VAL-TEE-013). ``base_url`` is accepted for CLI parity but is not required
+    for the core offline path.
+    """
+
+    from hypercluster.attest.compose_hash import (
+        hash_compose_file,
+        load_golden_hash_file,
+    )
+    from hypercluster.attest.offline_fixtures import (
+        make_offline_envelope,
+        package_quote_b64,
+    )
+    from hypercluster.attest.policy import (
+        DEFAULT_COMPOSE_HASH_GOLDEN,
+        TeeVerifyPolicy,
+    )
+    from hypercluster.attest.report_data import build_report_data
+    from hypercluster.attest.verify import verify_offline_fixture_file, verify_tee
+    from hypercluster.domain.scoring_tee import compute_tee_bonus
+    from hypercluster.settings import HyperSettings
+
+    normalized = base_url.rstrip("/")
+    steps: list[str] = []
+    steps.append("tee-offline: locate fixture root (offline only, no live network)")
+
+    try:
+        root = Path(fixture_dir) if fixture_dir is not None else _tee_fixture_root()
+    except FileNotFoundError as exc:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            str(exc),
+            steps,
+            None,
+        )
+    steps.append(f"fixture_root={root}")
+
+    # --- Valve A: compose-hash golden stability (VAL-TEE-010 integrated smoke)
+    golden_compose = root / "golden_compose.yml"
+    golden_hash = root / "golden_compose.sha256"
+    positive = root / "positive_tdx_v1.json"
+    if not golden_compose.is_file() or not golden_hash.is_file():
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"missing golden compose fixtures under {root}",
+            steps,
+            None,
+        )
+    if not positive.is_file():
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"missing positive_tdx_v1.json under {root}",
+            steps,
+            None,
+        )
+
+    steps.append("compose-hash golden: two successive hashes")
+    h1 = hash_compose_file(golden_compose)
+    h2 = hash_compose_file(golden_compose)
+    if h1 != h2:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"compose-hash non-deterministic: {h1} vs {h2}",
+            steps,
+            None,
+        )
+    expected_golden = load_golden_hash_file(golden_hash)
+    if h1 != expected_golden:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"compose-hash golden drift: got={h1} expected={expected_golden}",
+            steps,
+            None,
+        )
+    steps.append(f"compose-hash ok hash={h1}")
+
+    # --- Valve B: positive offline fixture verify (no network)
+    steps.append("offline_fixture positive verify")
+    policy = TeeVerifyPolicy(
+        compose_allowlist=frozenset({DEFAULT_COMPOSE_HASH_GOLDEN}),
+        tcb_enforce=True,
+        acceptable_tcb_statuses=frozenset({"UpToDate"}),
+        disallowed_advisory_ids=frozenset(),
+    )
+    positive_result = verify_offline_fixture_file(
+        positive,
+        policy=policy,
+        job_id="job-offline-positive-0001",
+        image_digest=(
+            "sha256:sim000000000000000000000000000000000000000000000000000000000001"
+        ),
+        nonce="n0nce-posit1ve-aaaa-bbbb-cccc-111111111111",
+    )
+    if not positive_result.is_valid:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            (
+                "positive fixture failed offline verify: "
+                f"reasons={positive_result.reason_codes}"
+            ),
+            steps,
+            None,
+        )
+    steps.append(
+        f"positive offline_fixture is_valid=true "
+        f"compose_hash={positive_result.compose_hash}"
+    )
+
+    # Bonus application for verified offline TDX (VAL-TEE-006 / scenario wiring).
+    bonus = compute_tee_bonus(
+        proof_tier="tdx",
+        verified=True,
+        verify_mode="offline_fixture",
+        tee_mode="tdx",
+        hyper=HyperSettings(tee_bonus_tdx=1.08, tee_bonus_tdx_gpu=1.20),
+        is_valid_verdict=True,
+    )
+    if bonus.tee_bonus != 1.08:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"expected tee_bonus=1.08 after positive offline, got {bonus.tee_bonus}",
+            steps,
+            None,
+        )
+    steps.append(f"tee_bonus applied={bonus.tee_bonus} (TDX offline path)")
+
+    # --- Valve C: mutated compose_hash rejects (no bonus)
+    steps.append("mutated compose_hash reject")
+    bad_compose = (
+        "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    )
+    job_id = "job-offline-mutated-compose"
+    image = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
+    nonce = "n0nce-mutated-compose-aaaa-bbbb-cccc-3333"
+    report = build_report_data(job_id=job_id, image_digest=image, nonce=nonce)
+    bad_env = make_offline_envelope(
+        compose_hash=bad_compose,
+        expected_compose_hash=DEFAULT_COMPOSE_HASH_GOLDEN,
+        report_data=report,
+        job_id=job_id,
+        image_digest=image,
+        nonce=nonce,
+        fixture_id="mutated_compose_scenario",
+    )
+    from hypercluster.attest.models import TeeVerifyRequest
+
+    bad_result = verify_tee(
+        TeeVerifyRequest(
+            quote_b64=package_quote_b64(bad_env),
+            report_data_expected=report,
+            mode="offline_fixture",
+        ),
+        policy=policy,
+    )
+    if bad_result.is_valid:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            "mutated compose_hash incorrectly verified is_valid=true",
+            steps,
+            None,
+        )
+    reasons = " ".join(bad_result.reason_codes).lower()
+    if not any(
+        token in reasons
+        for token in (
+            "compose",
+            "allowlist",
+            "measurement",
+        )
+    ):
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"mutated compose reject missing reason: {bad_result.reason_codes}",
+            steps,
+            None,
+        )
+    steps.append(
+        f"mutated compose rejected reasons={list(bad_result.reason_codes)}"
+    )
+
+    # Unverified claim → no inflated bonus.
+    no_bonus = compute_tee_bonus(
+        proof_tier="tdx",
+        verified=False,
+        verify_mode="offline_fixture",
+        tee_mode="tdx",
+        hyper=HyperSettings(tee_bonus_tdx=1.08),
+        is_valid_verdict=False,
+    )
+    if no_bonus.tee_bonus != 1.0:
+        return _fail(
+            TEE_OFFLINE,
+            normalized,
+            f"unverified claim unexpectedly got bonus={no_bonus.tee_bonus}",
+            steps,
+            None,
+        )
+    steps.append("unverified claim tee_bonus=1.0 ok")
+    steps.append("tee-offline complete (offline fixtures only; no live network)")
+
+    return ScenarioResult(
+        name=TEE_OFFLINE,
+        ok=True,
+        base_url=normalized,
+        message=(
+            "tee-offline passed: compose-hash golden + positive offline verify + "
+            "mutated compose reject (no hardware/network)"
+        ),
+        steps=steps,
+        identity=None,
+    )
+
+
 def run_scenario(
     name: str,
     base_url: str,
@@ -470,14 +728,16 @@ def run_scenario(
             timeout=timeout,
             shared_token=shared_token,
         )
-    if key in {NCCL, TEE_OFFLINE, WEIGHTS}:
+    if key == TEE_OFFLINE:
+        return run_tee_offline_scenario(base_url)
+    if key in {NCCL, WEIGHTS}:
         return ScenarioResult(
             name=key,
             ok=False,
             base_url=base_url.rstrip("/"),
             message=(
                 f"scenario {key!r} not implemented yet "
-                "(nccl/tee-offline/weights land in later milestones)"
+                "(nccl/weights land in later milestones)"
             ),
             steps=[f"scenario {key} stub — not implemented"],
         )
@@ -501,4 +761,5 @@ __all__ = [
     "run_marketplace_scenario",
     "run_scenario",
     "run_smoke_scenario",
+    "run_tee_offline_scenario",
 ]

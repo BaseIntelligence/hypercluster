@@ -43,7 +43,7 @@ def run_doctor(
         "identity_gates: health+ready",
         "local_sim_backend: stub_ok (M1)",
         "inventory_fixture: stub_ok (M1)",
-        "tee_offline_fixtures: stub_ok (M1 path present later)",
+        "tee_offline_fixtures: golden_compose + positive_tdx ready (M5)",
     ]
     errors: list[str] = []
     if not identity.ok:

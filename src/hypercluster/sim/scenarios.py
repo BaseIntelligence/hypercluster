@@ -19,6 +19,10 @@ Worker durability (combined path / restart / timeout / cancel / drain / integrit
 lives in :mod:`hypercluster.sim.cross_worker_durability_paths` as
 ``cross-worker-durability-paths`` (VAL-CROSS-014..017/025/026/028).
 
+Weights / leaderboard / self-deal / mock-master chaos lives in
+:mod:`hypercluster.sim.cross_weights_leaderboard_selfdeal` as
+``cross-weights-leaderboard-selfdeal`` (VAL-CROSS-012/019/020/027).
+
 See hypercluster.sim.orchestration for the reusable multi-scenario suite runner.
 """
 
@@ -45,6 +49,7 @@ CROSS_HAPPY_PATH = "cross-happy-path"
 CROSS_MULTINODE = "cross-multinode-fabric-tee"
 CROSS_MARKET_RESILIENCE = "cross-market-resilience-auth"
 CROSS_WORKER_DURABILITY = "cross-worker-durability-paths"
+CROSS_WEIGHTS_LEADERBOARD = "cross-weights-leaderboard-selfdeal"
 
 # Architecture §12.3 names remain the five canonical suite scenarios.
 KNOWN_SCENARIOS = (SMOKE, MARKETPLACE, NCCL, TEE_OFFLINE, WEIGHTS)
@@ -54,6 +59,7 @@ EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (
     CROSS_MULTINODE,
     CROSS_MARKET_RESILIENCE,
     CROSS_WORKER_DURABILITY,
+    CROSS_WEIGHTS_LEADERBOARD,
 )
 
 # Deterministic local-sim hotkeys (not real ss58; HMAC insecure mode).
@@ -1397,6 +1403,23 @@ def run_scenario(
             shared_token=shared_token,
             include_restart=True,
         )
+    if key in {
+        CROSS_WEIGHTS_LEADERBOARD,
+        "cross_weights_leaderboard_selfdeal",
+        "cross-weights-leaderboard",
+        "weights-leaderboard-selfdeal",
+    }:
+        from hypercluster.sim.cross_weights_leaderboard_selfdeal import (
+            run_cross_weights_leaderboard_selfdeal,
+        )
+
+        return run_cross_weights_leaderboard_selfdeal(
+            base_url,
+            timeout=max(timeout, 90.0),
+            shared_token=shared_token,
+            master_url=master_url,
+            include_master_chaos=True,
+        )
     return ScenarioResult(
         name=key,
         ok=False,
@@ -1413,6 +1436,7 @@ __all__ = [
     "CROSS_HAPPY_PATH",
     "CROSS_MARKET_RESILIENCE",
     "CROSS_MULTINODE",
+    "CROSS_WEIGHTS_LEADERBOARD",
     "CROSS_WORKER_DURABILITY",
     "EXTENDED_SCENARIOS",
     "KNOWN_SCENARIOS",

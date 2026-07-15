@@ -294,6 +294,35 @@ def run_cross_worker_durability_paths_bundle(
     )
 
 
+def run_cross_weights_leaderboard_selfdeal_bundle(
+    base_url: str,
+    *,
+    timeout: float = 90.0,
+    shared_token: str | None = None,
+    master_url: str | None = None,
+    stop_master_fn: Any | None = None,
+    start_master_fn: Any | None = None,
+    include_master_chaos: bool = True,
+    **kwargs: Any,
+) -> ScenarioResult:
+    """VAL-CROSS-012/019/020/027 weight push, multi-miner LB, self-deal, master chaos."""
+
+    from hypercluster.sim.cross_weights_leaderboard_selfdeal import (
+        run_cross_weights_leaderboard_selfdeal,
+    )
+
+    _ = kwargs
+    return run_cross_weights_leaderboard_selfdeal(
+        base_url,
+        timeout=timeout,
+        shared_token=shared_token,
+        master_url=master_url,
+        stop_master_fn=stop_master_fn,
+        start_master_fn=start_master_fn,
+        include_master_chaos=include_master_chaos,
+    )
+
+
 __all__ = [
     "DEFAULT_SCENARIO_ORDER",
     "FABRIC_SCENARIOS",
@@ -303,6 +332,7 @@ __all__ = [
     "run_cross_happy_path_bundle",
     "run_cross_market_resilience_auth_bundle",
     "run_cross_multinode_fabric_tee_bundle",
+    "run_cross_weights_leaderboard_selfdeal_bundle",
     "run_cross_worker_durability_paths_bundle",
     "run_fabric_bundle",
     "run_happy_path_bundle",

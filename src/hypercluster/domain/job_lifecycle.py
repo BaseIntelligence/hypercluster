@@ -34,6 +34,7 @@ from hypercluster.db.models import (
     utc_now,
 )
 from hypercluster.domain.jobs import JobError, get_job
+from hypercluster.fabric.planner import PLANNER_VERSION  # fabric-planner.v1
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,6 @@ _FORWARD: dict[str, str] = {
     JOB_STATUS_SCORING: JOB_STATUS_SUCCEEDED,
 }
 
-PLANNER_VERSION = "fabric-planner.v1"
 SIM_PROOF_TIER = "sim"
 
 
@@ -114,8 +114,33 @@ def build_sim_rankmap(
     nnodes: int,
     nproc_per_node: int,
     world_size: int,
+    policy: str = "pack",
+    fabric: str = "auto",
+    reports: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Synthetic rankmap for local sim (node_id = sim-node-{i})."""
+    """Rankmap via topology planner when reports exist; else sequential sim stubs.
+
+    When ``reports`` are provided, uses fabric planner pack/spread (VAL-FAB-004+).
+    Without reports, falls back to ``sim-node-{i}`` sequential layout for
+    existing job lifecycle tests that do not inject FabricReports.
+    """
+
+    if reports:
+        from hypercluster.fabric.planner import PlacementRequest, place_ranks, rankmap_as_dicts
+
+        result = place_ranks(
+            PlacementRequest(
+                job_id=job_id,
+                world_size=world_size,
+                nnodes=nnodes,
+                nproc_per_node=nproc_per_node,
+                policy="spread" if policy == "spread" else "pack",  # type: ignore[arg-type]
+                fabric=fabric if fabric in {"auto", "ib", "eth", "nvlink_only"} else "auto",  # type: ignore[arg-type]
+                node_reports=list(reports),
+            )
+        )
+        if result.ok:
+            return rankmap_as_dicts(result)
 
     rankmap: list[dict[str, Any]] = []
     rank = 0
@@ -634,36 +659,80 @@ async def _place_job(session: AsyncSession, job: Job) -> None:
                 status_code=409,
             )
 
-    rankmap = build_sim_rankmap(
-        job_id=job.id,
-        nnodes=int(job.nnodes),
-        nproc_per_node=int(job.nproc_per_node),
-        world_size=int(job.world_size),
-    )
-    if member_ids and rankmap:
-        for binding in rankmap:
-            idx = 0
-            try:
-                raw = str(binding.get("node_id") or "")
-                if raw.startswith("sim-node-"):
-                    idx = int(raw.split("-")[-1])
-            except (TypeError, ValueError):
-                idx = 0
-            if 0 <= idx < len(member_ids):
-                binding["node_id"] = member_ids[idx]
+    policy = (job.placement_policy or "pack").strip().lower()
+    if policy not in {"pack", "spread"}:
+        policy = "pack"
 
-    nccl_env = build_sim_nccl_env(
-        fabric_mode=job.fabric_mode,
-        backend=job.backend,
-        reports=reports or None,
-    )
+    # Prefer topology-aware planner when FabricReports are available.
+    planner_graph_digest: str | None = None
+    rankmap: list[dict[str, Any]]
+    nccl_env: dict[str, str]
+    if reports:
+        from hypercluster.fabric.planner import PlacementRequest, place_ranks, rankmap_as_dicts
+
+        # Restrict planning to bound member nodes when present.
+        plan_reports = reports
+        if member_ids:
+            allowed = set(member_ids)
+            plan_reports = [r for r in reports if r.node_id in allowed] or reports
+
+        fabric_mode = mode if mode in {"auto", "ib", "eth", "nvlink_only"} else "auto"
+        plan = place_ranks(
+            PlacementRequest(
+                job_id=job.id,
+                world_size=int(job.world_size),
+                nnodes=int(job.nnodes),
+                nproc_per_node=int(job.nproc_per_node),
+                policy=policy,  # type: ignore[arg-type]
+                fabric=fabric_mode,  # type: ignore[arg-type]
+                node_reports=list(plan_reports),
+            )
+        )
+        if not plan.ok:
+            raise JobError(
+                plan.failure_code or "placement_failed",
+                plan.reason or "topology planner could not place ranks",
+                status_code=409,
+            )
+        rankmap = rankmap_as_dicts(plan)
+        nccl_env = dict(plan.nccl_env)
+        nccl_env.setdefault("HYPER_BACKEND", job.backend)
+        planner_graph_digest = plan.graph_digest
+    else:
+        rankmap = build_sim_rankmap(
+            job_id=job.id,
+            nnodes=int(job.nnodes),
+            nproc_per_node=int(job.nproc_per_node),
+            world_size=int(job.world_size),
+            policy=policy,
+            fabric=mode,
+            reports=None,
+        )
+        if member_ids and rankmap:
+            for binding in rankmap:
+                idx = 0
+                try:
+                    raw = str(binding.get("node_id") or "")
+                    if raw.startswith("sim-node-"):
+                        idx = int(raw.split("-")[-1])
+                except (TypeError, ValueError):
+                    idx = 0
+                if 0 <= idx < len(member_ids):
+                    binding["node_id"] = member_ids[idx]
+        nccl_env = build_sim_nccl_env(
+            fabric_mode=job.fabric_mode,
+            backend=job.backend,
+            reports=None,
+        )
+
     launch = build_launch_contract(job=job, rankmap=rankmap, nccl_env=nccl_env)
-    graph_digest = _sha256_hex(
+    graph_digest = planner_graph_digest or _sha256_hex(
         _canonical_json(
             {
                 "rankmap": rankmap,
-                "policy": job.placement_policy,
+                "policy": policy,
                 "member_ids": member_ids,
+                "planner_version": PLANNER_VERSION,
             }
         )
     )
@@ -675,7 +744,7 @@ async def _place_job(session: AsyncSession, job: Job) -> None:
                 id=str(uuid.uuid4()),
                 job_id=job.id,
                 rankmap_json=json.dumps(rankmap),
-                placement_policy=job.placement_policy,
+                placement_policy=policy,
                 nccl_env_json=json.dumps(nccl_env),
                 planner_version=PLANNER_VERSION,
                 launch_contract_json=json.dumps(launch),

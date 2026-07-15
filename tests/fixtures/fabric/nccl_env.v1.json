@@ -1,0 +1,38 @@
+{
+  "version": "nccl_env.v1",
+  "job_id": "fixture-nccl-v1",
+  "world_size": 4,
+  "nnodes": 2,
+  "nproc_per_node": 2,
+  "policy": "pack",
+  "fabric": "ib",
+  "backend": "nccl",
+  "master_addr": "10.0.0.10",
+  "master_port": "29500",
+  "socket_ifname": "eth0",
+  "critical_keys": [
+    "MASTER_ADDR",
+    "MASTER_PORT",
+    "TORCH_NCCL_ASYNC_ERROR_HANDLING",
+    "NCCL_SOCKET_IFNAME",
+    "NCCL_NET",
+    "NCCL_IB_HCA",
+    "NCCL_IB_GID_INDEX",
+    "HYPER_NCCL_ENV_VERSION",
+    "HYPER_FABRIC_MODE",
+    "HYPER_BACKEND"
+  ],
+  "nccl_env": {
+    "MASTER_ADDR": "10.0.0.10",
+    "MASTER_PORT": "29500",
+    "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
+    "NCCL_SOCKET_IFNAME": "eth0",
+    "NCCL_NET": "IB",
+    "NCCL_IB_HCA": "mlx5_0",
+    "NCCL_IB_GID_INDEX": "3",
+    "HYPER_NCCL_ENV_VERSION": "nccl_env.v1",
+    "HYPER_FABRIC_MODE": "ib",
+    "HYPER_BACKEND": "nccl",
+    "HYPER_RESOLVED_TRANSPORT": "ib"
+  }
+}

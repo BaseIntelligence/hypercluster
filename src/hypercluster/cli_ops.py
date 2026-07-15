@@ -1,6 +1,7 @@
-"""Core CLI ops: serve, db, marketplace, jobs, and node register/heartbeat.
+"""Core CLI ops: serve, db, marketplace, jobs, and node register/probe.
 
 Registered onto the root Typer app from ``hypercluster.cli`` (VAL-CLI-001/004/020/021).
+Includes M9 GPU probe + evidence commands (VAL-GPU-040/041).
 """
 
 from __future__ import annotations
@@ -24,6 +25,28 @@ from hypercluster.cli_common import (
     resolve_shared_token,
     url_option,
 )
+
+# Map design §5 probe-gpu-sim --fail CHECK_ID → FakeSsh fixture names.
+_PROBE_SIM_FAIL_FIXTURES: dict[str, str] = {
+    "ssh_connect": "ssh_timeout",
+    "nvidia_smi_list": "no_gpu",
+    "gpu_count": "no_gpu",
+    "gpu_model_match": "wrong_model",
+    "gpu_uuid_valid": "no_gpu",
+    "gpu_uuid_unique": "uuid_clone",
+    "vram_window": "vram_lie",
+    "driver_present": "no_gpu",
+    "cuda_microbench": "bench_fail",
+    "docker_runtime": "docker_missing",
+    "fingerprint_stable": "fingerprint_churn",
+    "claim_consistency": "wrong_model",
+}
+
+# M9 design §5 exit codes for nodes probe-gpu
+PROBE_EXIT_PASS = 0
+PROBE_EXIT_USAGE = 1
+PROBE_EXIT_FAILED_CHECKS = 2
+PROBE_EXIT_TRANSPORT = 3
 
 db_app = typer.Typer(
     add_completion=False,
@@ -438,6 +461,411 @@ def register_nodes_mutate(nodes_app: typer.Typer) -> None:
         emit(payload, as_json=as_json)
         raise typer.Exit(code=0)
 
+    _register_nodes_probe_commands(nodes_app)
+
+
+def _parse_key_ref(raw: str | None) -> dict[str, str] | None:
+    """Parse ``env:NAME`` / ``file:PATH`` / bare path into API key_ref body.
+
+    Never accepts raw PEM (private keys forbidden on API body).
+    """
+
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if "BEGIN " in text.upper() and "PRIVATE KEY" in text.upper():
+        typer.echo(
+            "error: private key PEM not allowed on CLI; use --key-ref env:NAME or file:PATH",
+            err=True,
+        )
+        raise typer.Exit(code=PROBE_EXIT_USAGE)
+    if text.startswith("env:"):
+        name = text[4:].strip()
+        if not name:
+            typer.echo("error: empty env key_ref name", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        return {"kind": "env", "name": name}
+    if text.startswith("file:"):
+        name = text[5:].strip()
+        if not name:
+            typer.echo("error: empty file key_ref path", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        return {"kind": "file", "name": name}
+    # Bare path → file ref
+    return {"kind": "file", "name": text}
+
+
+def _probe_exit_code(payload: dict[str, Any], *, http_status: int) -> int:
+    """Map probe API response → CLI exit code (design §5 / VAL-GPU-040).
+
+    0 pass, 2 failed checks, 3 transport/error, 1 usage-class client errors.
+    """
+
+    if http_status in {400, 401, 403, 404, 422}:
+        return PROBE_EXIT_USAGE
+    if http_status in {503}:
+        return PROBE_EXIT_TRANSPORT
+    if http_status >= 500:
+        return PROBE_EXIT_TRANSPORT
+
+    status_val = str(payload.get("status") or "").lower()
+    if status_val == "passed":
+        return PROBE_EXIT_PASS
+    if status_val == "error":
+        # Transport/connect errors map to exit 3; residual check failures → 2
+        code = str(payload.get("failure_code") or "").lower()
+        if any(
+            token in code
+            for token in (
+                "ssh",
+                "timeout",
+                "transport",
+                "connect",
+                "unavailable",
+            )
+        ):
+            return PROBE_EXIT_TRANSPORT
+        # FakeSsh ssh_timeout often surfaces as failed/error with ssh_connect
+        checks = payload.get("checks") or []
+        for c in checks:
+            if not isinstance(c, dict):
+                continue
+            if c.get("id") == "ssh_connect" and c.get("passed") is False:
+                return PROBE_EXIT_TRANSPORT
+        return PROBE_EXIT_FAILED_CHECKS
+    if status_val == "failed":
+        return PROBE_EXIT_FAILED_CHECKS
+    # Unknown status with evidence still treated as fail-closed non-zero
+    return PROBE_EXIT_FAILED_CHECKS
+
+
+def _run_probe_gpu(
+    *,
+    node_id: str,
+    mode: str,
+    timeout_s: int | None,
+    key_ref_raw: str | None,
+    fixture: str | None,
+    hotkey_flag: str | None,
+    token_flag: str | None,
+    url: str | None,
+    host: str | None,
+    port: int | None,
+    as_json: bool,
+) -> None:
+    """Shared body for probe-gpu / probe-gpu-sim (signed product base-url)."""
+
+    hotkey, secret = require_mutate_auth(hotkey=hotkey_flag, token=token_flag)
+    base = resolve_base_url(url, host, port)
+    body: dict[str, Any] = {
+        "mode": "quick" if str(mode).lower() == "quick" else "full",
+    }
+    if timeout_s is not None:
+        body["timeout_s"] = int(timeout_s)
+    key_ref = _parse_key_ref(key_ref_raw)
+    if key_ref is not None:
+        body["key_ref"] = key_ref
+    if fixture:
+        body["fixture"] = str(fixture)
+
+    # Probes can take longer than default marketplace calls when real SSH is used;
+    # FakeSsh is still fast. Keep a higher HTTP timeout without shipping Verda.
+    response = http_request(
+        "POST",
+        f"{base}/v1/nodes/{node_id}/probes/gpu",
+        json_body=body,
+        signed=True,
+        hotkey=hotkey,
+        token=secret,
+        timeout=max(30.0, float(timeout_s or 30)),
+        expect_statuses=None,  # map statuses ourselves for exit codes
+    )
+    # Client-visible 4xx/5xx: still try to parse JSON detail, then exit.
+    try:
+        payload = parse_json_response(response)
+    except typer.Exit:
+        code = (
+            PROBE_EXIT_TRANSPORT
+            if response.status_code >= 500 or response.status_code == 503
+            else PROBE_EXIT_USAGE
+        )
+        raise typer.Exit(code=code) from None
+
+    if not isinstance(payload, dict):
+        typer.echo("error: probe response was not a JSON object", err=True)
+        raise typer.Exit(code=PROBE_EXIT_USAGE)
+
+    if response.status_code != 200:
+        detail = payload.get("detail")
+        err_code = None
+        if isinstance(detail, dict):
+            err_code = detail.get("code")
+        elif isinstance(payload.get("code"), str):
+            err_code = payload.get("code")
+        emit(
+            payload,
+            as_json=as_json,
+            human_line=(
+                f"probe-gpu http={response.status_code} code={err_code}"
+            ),
+        )
+        raise typer.Exit(code=_probe_exit_code(payload, http_status=response.status_code))
+
+    exit_code = _probe_exit_code(payload, http_status=200)
+    evidence_id = payload.get("evidence_id") or payload.get("id")
+    status_val = payload.get("status")
+    emit(
+        payload,
+        as_json=as_json,
+        human_line=(
+            f"probe-gpu status={status_val} evidence_id={evidence_id} "
+            f"checks_failed={payload.get('checks_failed')}"
+        ),
+    )
+    raise typer.Exit(code=exit_code)
+
+
+def _register_nodes_probe_commands(nodes_app: typer.Typer) -> None:
+    """Attach probe-gpu / probe-gpu-sim / evidence (VAL-GPU-040/041)."""
+
+    evidence_app = typer.Typer(
+        add_completion=False,
+        no_args_is_help=True,
+        help="GPU host evidence list/show/latest (API field parity).",
+    )
+    nodes_app.add_typer(evidence_app, name="evidence")
+
+    @nodes_app.command("probe-gpu")
+    def nodes_probe_gpu_cmd(
+        node_id: str = typer.Argument(..., help="Registered node id"),
+        mode: str = typer.Option("full", "--mode", help="full|quick"),
+        timeout_s: int | None = typer.Option(
+            None,
+            "--timeout",
+            help="Wall timeout seconds (mapped into probe request)",
+        ),
+        key_ref: str | None = typer.Option(
+            None,
+            "--key-ref",
+            help="SSH key ref: env:NAME | file:PATH (never raw PEM)",
+        ),
+        fixture: str | None = typer.Option(
+            None,
+            "--fixture",
+            help="FakeSsh fixture name override (CI only; ignored on real transport)",
+        ),
+        probe_hotkey: str | None = typer.Option(None, "--hotkey"),
+        token: str | None = typer.Option(None, "--token"),
+        url: str | None = url_option(),
+        host: str | None = typer.Option(None, help="API host when --url omitted"),
+        port: int | None = typer.Option(None, help="API port when --url omitted"),
+        as_json: bool = json_option(),
+    ) -> None:
+        """Run owner-signed GPU probe via product API (VAL-GPU-040).
+
+        Exit codes (design §5): 0 pass, 2 failed checks, 3 transport/error, 1 usage.
+        Wraps ``POST /v1/nodes/{id}/probes/gpu`` only — no Verda client, no set_weights.
+        """
+
+        if not node_id.strip():
+            typer.echo("error: NODE_ID is required", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        _run_probe_gpu(
+            node_id=node_id.strip(),
+            mode=mode,
+            timeout_s=timeout_s,
+            key_ref_raw=key_ref,
+            fixture=fixture,
+            hotkey_flag=probe_hotkey,
+            token_flag=token,
+            url=url,
+            host=host,
+            port=port,
+            as_json=as_json,
+        )
+
+    @nodes_app.command("probe-gpu-sim")
+    def nodes_probe_gpu_sim_cmd(
+        node_id: str = typer.Argument(..., help="Registered node id"),
+        pass_all: bool = typer.Option(
+            False,
+            "--pass-all",
+            help="Run FakeSsh pass_all fixture",
+        ),
+        fail: str | None = typer.Option(
+            None,
+            "--fail",
+            help="Inject fatal fail for CHECK_ID via FakeSsh fixture bank",
+        ),
+        mode: str = typer.Option("full", "--mode", help="full|quick"),
+        sim_hotkey: str | None = typer.Option(None, "--hotkey"),
+        token: str | None = typer.Option(None, "--token"),
+        url: str | None = url_option(),
+        host: str | None = typer.Option(None, help="API host when --url omitted"),
+        port: int | None = typer.Option(None, help="API port when --url omitted"),
+        as_json: bool = json_option(),
+    ) -> None:
+        """Ops FakeSsh helper: --pass-all or --fail CHECK_ID (VAL-GPU-040).
+
+        Same signed product path as ``probe-gpu``; fixture forces CI outcomes.
+        """
+
+        if pass_all and fail:
+            typer.echo("error: use either --pass-all or --fail, not both", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        if not pass_all and not fail:
+            typer.echo(
+                "error: probe-gpu-sim requires --pass-all or --fail CHECK_ID",
+                err=True,
+            )
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+
+        fixture: str
+        if pass_all:
+            fixture = "pass_all"
+        else:
+            assert fail is not None
+            check_id = fail.strip()
+            fixture = _PROBE_SIM_FAIL_FIXTURES.get(check_id, check_id)
+            if check_id not in _PROBE_SIM_FAIL_FIXTURES and check_id not in {
+                "pass_all",
+                "no_gpu",
+                "wrong_model",
+                "uuid_clone",
+                "vram_lie",
+                "bench_fail",
+                "docker_missing",
+                "ssh_timeout",
+                "fingerprint_churn",
+            }:
+                # Still allow direct fixture names; unknown ids also forwarded as fixture
+                typer.echo(
+                    f"probe-gpu-sim: mapping --fail {check_id!r} → fixture {fixture!r}",
+                    err=True,
+                )
+
+        _run_probe_gpu(
+            node_id=node_id.strip(),
+            mode=mode,
+            timeout_s=None,
+            key_ref_raw=None,
+            fixture=fixture,
+            hotkey_flag=sim_hotkey,
+            token_flag=token,
+            url=url,
+            host=host,
+            port=port,
+            as_json=as_json,
+        )
+
+    @evidence_app.command("list")
+    def evidence_list_cmd(
+        node_id: str = typer.Argument(..., help="Node id to list evidence for"),
+        limit: int = typer.Option(50, "--limit", min=1, max=200),
+        url: str | None = url_option(),
+        host: str | None = typer.Option(None, help="API host when --url omitted"),
+        port: int | None = typer.Option(None, help="API port when --url omitted"),
+        as_json: bool = json_option(),
+    ) -> None:
+        """List GPU evidence newest-first (VAL-GPU-041; GET probes/gpu)."""
+
+        base = resolve_base_url(url, host, port)
+        response = http_request(
+            "GET",
+            f"{base}/v1/nodes/{node_id}/probes/gpu",
+            params={"limit": int(limit)},
+            expect_statuses={200},
+        )
+        payload = parse_json_response(response)
+        # Keep API shape {items: [...]} for field parity; also accept raw list.
+        if isinstance(payload, list):
+            payload = {"items": payload}
+        emit(
+            payload,
+            as_json=as_json,
+            human_line=(
+                f"evidence items={len((payload or {}).get('items') or [])} "
+                f"node_id={node_id}"
+            ),
+        )
+        raise typer.Exit(code=0)
+
+    @evidence_app.command("latest")
+    def evidence_latest_cmd(
+        node_id: str = typer.Argument(..., help="Node id"),
+        url: str | None = url_option(),
+        host: str | None = typer.Option(None, help="API host when --url omitted"),
+        port: int | None = typer.Option(None, help="API port when --url omitted"),
+        as_json: bool = json_option(),
+    ) -> None:
+        """Show latest GPU evidence for a node (VAL-GPU-041)."""
+
+        base = resolve_base_url(url, host, port)
+        response = http_request(
+            "GET",
+            f"{base}/v1/nodes/{node_id}/probes/gpu/latest",
+            expect_statuses={200, 404},
+        )
+        if response.status_code == 404:
+            typer.echo(f"error: no GPU evidence for node {node_id}", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        payload = parse_json_response(response)
+        if not isinstance(payload, dict):
+            typer.echo("error: latest evidence response was not a JSON object", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        evidence_id = payload.get("evidence_id") or payload.get("id")
+        emit(
+            payload,
+            as_json=as_json,
+            human_line=(
+                f"latest evidence_id={evidence_id} status={payload.get('status')}"
+            ),
+        )
+        raise typer.Exit(code=0)
+
+    @evidence_app.command("show")
+    def evidence_show_cmd(
+        evidence_id: str = typer.Argument(..., help="Evidence id"),
+        node_id: str | None = typer.Option(
+            None,
+            "--node-id",
+            help="Optional node scope (uses node route when set)",
+        ),
+        url: str | None = url_option(),
+        host: str | None = typer.Option(None, help="API host when --url omitted"),
+        port: int | None = typer.Option(None, help="API port when --url omitted"),
+        as_json: bool = json_option(),
+    ) -> None:
+        """Show full evidence by id (checks + digests; VAL-GPU-041).
+
+        Prefer global ``GET /v1/evidence/gpu/{id}``; optional ``--node-id`` uses
+        node-scoped GET for the same document shape.
+        """
+
+        base = resolve_base_url(url, host, port)
+        if node_id:
+            path = f"{base}/v1/nodes/{node_id}/probes/gpu/{evidence_id}"
+        else:
+            path = f"{base}/v1/evidence/gpu/{evidence_id}"
+        response = http_request(
+            "GET",
+            path,
+            expect_statuses={200, 404},
+        )
+        if response.status_code == 404:
+            typer.echo(f"error: evidence not found: {evidence_id}", err=True)
+            raise typer.Exit(code=PROBE_EXIT_USAGE)
+        payload = parse_json_response(response)
+        status_val = payload.get("status") if isinstance(payload, dict) else None
+        emit(
+            payload,
+            as_json=as_json,
+            human_line=f"evidence_id={evidence_id} status={status_val}",
+        )
+        raise typer.Exit(code=0)
+
 
 @jobs_app.command("submit")
 def jobs_submit_cmd(
@@ -752,6 +1180,10 @@ def _safe_logs_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "PROBE_EXIT_FAILED_CHECKS",
+    "PROBE_EXIT_PASS",
+    "PROBE_EXIT_TRANSPORT",
+    "PROBE_EXIT_USAGE",
     "db_app",
     "jobs_app",
     "marketplace_app",

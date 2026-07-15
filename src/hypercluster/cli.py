@@ -42,7 +42,7 @@ sim_app = typer.Typer(
 nodes_app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Provider node register / heartbeat / fabric-scan.",
+    help="Provider node register / heartbeat / fabric-scan / probe-gpu / evidence.",
 )
 fabric_app = typer.Typer(
     add_completion=False,

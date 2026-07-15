@@ -827,11 +827,14 @@ async def _collect_success(
     # Honesty injects from HyperSettings (sim knobs).
     honesty_level = "l1"
     inventory_spoof = False
+    eth_fallback_injected = False
     inject_status: str | None = None
     inject_sleep_s = 0.0
     if hyper is not None:
         honesty_level = str(getattr(hyper, "sim_honesty_level", "l1") or "l1")
         inventory_spoof = bool(getattr(hyper, "sim_inventory_spoof", False))
+        # VAL-FAB-012 black-box: HYPER_SIM_ETH_FALLBACK → eth_fallback_injected
+        eth_fallback_injected = bool(getattr(hyper, "sim_eth_fallback", False))
         if bool(getattr(hyper, "sim_launch_fail", False)):
             inject_status = "failed"
         if bool(getattr(hyper, "sim_launch_timeout", False)):
@@ -868,6 +871,7 @@ async def _collect_success(
             honesty_level=honesty_level if honesty_level in {"l0", "l1", "l2"} else "l1",  # type: ignore[arg-type]
             inject_status=inject_status,  # type: ignore[arg-type]
             inject_sleep_s=inject_sleep_s,
+            eth_fallback_injected=eth_fallback_injected,
             inventory_spoof=inventory_spoof,
             node_reports=list(reports),
             seed=0,

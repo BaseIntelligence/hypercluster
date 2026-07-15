@@ -263,6 +263,7 @@ def test_honest_ib_launch_keeps_fabric_gate_one() -> None:
             fabric_mode="ib",
             honesty_level="l1",
             inventory_spoof=False,
+            eth_fallback_injected=False,
             node_reports=inv.reports(),
         )
     )
@@ -270,6 +271,73 @@ def test_honest_ib_launch_keeps_fabric_gate_one() -> None:
     assert result.fabric_gate == 1.0
     assert result.composite > 0.0
     assert result.integrity_fail is False
+
+
+def test_eth_fallback_under_ib_zeros_fabric_gate_and_composite() -> None:
+    """VAL-FAB-012: eth_fallback_injected under fabric=ib zeros fabric_gate/composite."""
+
+    inv = seed_sim_inventory(seed=4, node_count=2, gpus_per_node=2)
+    reports = inv.reports()
+    placement = place_ranks(
+        PlacementRequest(
+            job_id="job-eth-fallback",
+            world_size=2,
+            nnodes=2,
+            nproc_per_node=1,
+            policy="pack",
+            fabric="ib",
+            node_reports=reports,
+        )
+    )
+    assert placement.ok
+
+    result = sim_launch(
+        LaunchRequest(
+            placement=placement,
+            image_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            fabric_mode="ib",
+            honesty_level="l1",
+            eth_fallback_injected=True,
+            inventory_spoof=False,
+            node_reports=reports,
+        )
+    )
+    # Operational may complete; honesty zeros gate product (observable metrics).
+    assert result.fabric_gate == 0.0
+    assert result.composite == 0.0
+    assert result.integrity_fail is True
+    mj = result.metrics_json()
+    assert mj["fabric_gate"] == 0.0
+    assert mj["composite"] == 0.0
+    reasons = list(result.score_factors.get("reason_codes") or [])
+    assert any("fallback" in c.lower() or "eth" in c.lower() for c in reasons) or (
+        result.failure_code == "forbidden_eth_fallback"
+    )
+
+    # Default path (no inject) stays green under same inventory.
+    honest = sim_launch(
+        LaunchRequest(
+            placement=placement,
+            image_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            fabric_mode="ib",
+            honesty_level="l1",
+            eth_fallback_injected=False,
+            inventory_spoof=False,
+            node_reports=reports,
+        )
+    )
+    assert honest.fabric_gate == 1.0
+    assert honest.composite > 0.0
+    assert honest.integrity_fail is False
+
+
+def test_hyper_settings_sim_eth_fallback_default_false() -> None:
+    """HYPER_SIM_ETH_FALLBACK defaults false so normal IB path is unchanged."""
+
+    from hypercluster.settings import HyperSettings
+
+    hyper = HyperSettings()
+    assert hyper.sim_eth_fallback is False
 
 
 def test_spoofed_node_ids_list_also_triggers_honesty_fail() -> None:

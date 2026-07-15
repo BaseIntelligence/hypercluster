@@ -95,6 +95,9 @@ class HyperSettings(BaseSettings):
     sim_launch_inject_sleep_s: float = Field(default=0.0, ge=0.0)
     sim_honesty_level: str = Field(default="l1")  # l0|l1|l2
     sim_inventory_spoof: bool = False
+    # Force eth fallback under fabric=ib honesty path (VAL-FAB-012 black-box).
+    # Env: HYPER_SIM_ETH_FALLBACK. Default false leaves normal IB path unchanged.
+    sim_eth_fallback: bool = False
     # Concurrent multi-node / large-job budget (VAL-JOB-015).
     max_concurrent_large_jobs: int = Field(default=4, ge=1)
     large_job_world_size_threshold: int = Field(default=4, ge=1)

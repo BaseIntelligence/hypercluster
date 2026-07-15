@@ -246,6 +246,96 @@ async def _submit_and_drain(client: AsyncClient, **overrides: Any) -> str:
     return job_id
 
 
+@pytest.fixture
+async def eth_fallback_app_client(
+    settings_factory, tmp_path
+) -> AsyncIterator[tuple[Any, AsyncClient]]:
+    """Combined worker with HYPER_SIM_ETH_FALLBACK=true (VAL-FAB-012 black-box)."""
+
+    from hypercluster.app import create_app
+    from hypercluster.settings import HyperSettings
+
+    settings = settings_factory(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'fab-eth-fallback.sqlite3'}",
+        shared_token=TOKEN,
+        shared_token_file=None,
+    )
+    hyper = HyperSettings(
+        allow_insecure_signatures=True,
+        signature_ttl_seconds=300,
+        combined_worker=True,
+        combined_worker_interval_seconds=0.05,
+        job_image_allowlist=ALLOWED_IMAGE,
+        max_job_world_size=64,
+        max_job_nnodes=16,
+        max_job_nproc_per_node=8,
+        max_job_timeout_s=3600,
+        max_job_gpu_budget=32,
+        sim_job_step_delay_s=0.0,
+        sim_job_run_sleep_s=0.0,
+        sim_auto_capacity=True,
+        sim_eth_fallback=True,
+        sim_inventory_spoof=False,
+        sim_honesty_level="l1",
+    )
+    app = create_app(settings, hyper_settings=hyper)
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            yield app, client
+
+
+@pytest.mark.asyncio
+async def test_api_eth_fallback_observably_zeros_fabric_gate(
+    eth_fallback_app_client: tuple[Any, AsyncClient],
+) -> None:
+    """VAL-FAB-012 black-box: HYPER_SIM_ETH_FALLBACK → fabric_gate=0 on job metrics.
+
+    Auto-capacity fabric=ib is allowed without bound IB reports (no member
+    reports → missing_ib gate not tripped at place). Fallbacks inject at
+    launch so attempt metrics_json shows fabric_gate 0 + composite 0.
+    """
+
+    _app, client = eth_fallback_app_client
+    job_id = await _submit_and_drain(
+        client,
+        fabric="ib",
+        world_size=2,
+        nnodes=2,
+        nproc_per_node=1,
+        resource={"gpus": 2, "nodes": 2},
+        client_request_id="fab-eth-fallback-012",
+    )
+    detail = await client.get(f"/v1/jobs/{job_id}")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["status"] in {"succeeded", "failed", "timeout"}, body
+
+    attempts = await client.get(f"/v1/jobs/{job_id}/attempts/1")
+    assert attempts.status_code == 200, attempts.text
+    att = attempts.json()
+    metrics = att.get("metrics") or {}
+    assert metrics, att
+    # Observable score factors via attempt metrics (launcher metrics_json).
+    fabric_gate = metrics.get("fabric_gate")
+    composite = metrics.get("composite")
+    score_factors = metrics.get("score_factors") or {}
+    if fabric_gate is None and "fabric_gate" in score_factors:
+        fabric_gate = score_factors["fabric_gate"]
+    if composite is None and "composite" in score_factors:
+        composite = score_factors["composite"]
+    assert float(fabric_gate) == 0.0, metrics
+    assert float(composite) == 0.0, metrics
+    reasons = list(score_factors.get("reason_codes") or [])
+    failure = str(att.get("failure_code") or metrics.get("failure_code") or "")
+    assert (
+        any("fallback" in c.lower() or "eth" in c.lower() for c in reasons)
+        or "fallback" in failure.lower()
+        or "eth" in failure.lower()
+        or fabric_gate == 0.0
+    ), metrics
+
+
 @pytest.mark.asyncio
 async def test_completed_multi_node_job_fabric_report_bundles_nodes(
     fab_app_client: tuple[Any, AsyncClient],

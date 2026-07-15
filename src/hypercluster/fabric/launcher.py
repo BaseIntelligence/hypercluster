@@ -1,6 +1,7 @@
 """Multi-node sim launcher contract + honesty layers L1/L2 (architecture §8.3–8.4).
 
 Fulfills:
+  VAL-FAB-012  eth fallback under fabric=ib zeros fabric_gate (via eth_fallback_injected)
   VAL-FAB-013  synthetic NCCL allreduce metrics under sim (L1)
   VAL-FAB-014  LaunchResult status enumerations (succeeded|failed|timeout)
   VAL-FAB-015  cross-rank progress digests when L2 enabled
@@ -409,11 +410,15 @@ def sim_launch(request: LaunchRequest) -> LaunchResult:
     integrity_fail = bool(gate.composite_zeroed or spoof_codes)
     factors = summarize_gate_for_score(
         gate,
-        correctness=0.0 if integrity_fail and request.inventory_spoof else 1.0,
+        correctness=(
+            0.0
+            if integrity_fail and (request.inventory_spoof or request.eth_fallback_injected)
+            else 1.0
+        ),
         efficiency=metrics.efficiency if metrics.within_band else 0.0,
         tee_bonus=1.0,
     )
-    # VAL-FAB-025: spoof → fabric_gate 0 and composite 0 always.
+    # VAL-FAB-012/025: honesty fail → fabric_gate 0 and composite 0 always.
     if integrity_fail:
         factors["fabric_gate"] = 0.0
         factors["composite"] = 0.0
@@ -457,6 +462,12 @@ def sim_launch(request: LaunchRequest) -> LaunchResult:
         failure_code = "inventory_spoof"
         reason = "inventory spoof detected; fabric honesty fail-closed"
         status = "succeeded"  # operational complete; honesty via score factors
+    elif integrity_fail and request.eth_fallback_injected:
+        # VAL-FAB-012: eth fallback under fabric=ib zeros fabric_gate/composite
+        # while still leaving metrics_json observable via job attempts.
+        failure_code = "forbidden_eth_fallback"
+        reason = "eth fallback under fabric=ib; fabric honesty fail-closed"
+        status = "succeeded"
 
     return LaunchResult(
         status=status,

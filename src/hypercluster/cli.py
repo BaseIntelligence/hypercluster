@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -49,9 +50,15 @@ fabric_report_app = typer.Typer(
     no_args_is_help=True,
     help="Show fabric report digests for jobs.",
 )
+attest_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="dstack TEE offline verify and compose-hash helpers.",
+)
 app.add_typer(sim_app, name="sim")
 app.add_typer(nodes_app, name="nodes")
 app.add_typer(fabric_app, name="fabric")
+app.add_typer(attest_app, name="attest")
 fabric_app.add_typer(fabric_report_app, name="report")
 
 
@@ -438,6 +445,72 @@ def fabric_plan_cmd(
     if not plan.ok:
         raise typer.Exit(code=1)
     raise typer.Exit(code=0)
+
+
+@attest_app.command("verify-offline")
+def attest_verify_offline_cmd(
+    quote_fixture: Path = typer.Option(
+        ...,
+        "--quote-fixture",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Path to offline TEE quote fixture JSON",
+    ),
+    job_id: str | None = typer.Option(None, "--job-id", help="Expected job_id for binding"),
+    image_digest: str | None = typer.Option(
+        None, "--image-digest", help="Expected image digest for binding"
+    ),
+    nonce: str | None = typer.Option(None, "--nonce", help="Expected nonce for binding"),
+    tcb_enforce: bool | None = typer.Option(
+        None,
+        "--tcb-enforce/--no-tcb-enforce",
+        help="Override HYPER_TEE_TCB_ENFORCE (default from settings)",
+    ),
+) -> None:
+    """Verify an offline TEE quote fixture (VAL-TEE-001..). Exit 0 iff is_valid."""
+
+    from hypercluster.attest.offline_fixtures import load_quote_fixture
+    from hypercluster.attest.policy import TeeVerifyPolicy, default_policy_from_settings
+    from hypercluster.attest.report_data import build_report_data, parse_report_data
+    from hypercluster.attest.verify import verify_offline_fixture_file
+
+    base_policy = default_policy_from_settings()
+    policy = (
+        TeeVerifyPolicy(
+            compose_allowlist=base_policy.compose_allowlist,
+            tcb_enforce=bool(tcb_enforce)
+            if tcb_enforce is not None
+            else base_policy.tcb_enforce,
+            acceptable_tcb_statuses=base_policy.acceptable_tcb_statuses,
+            disallowed_advisory_ids=base_policy.disallowed_advisory_ids,
+        )
+        if tcb_enforce is not None
+        else base_policy
+    )
+
+    report_data_expected: bytes | None = None
+    if job_id and image_digest and nonce:
+        report_data_expected = build_report_data(
+            job_id=job_id, image_digest=image_digest, nonce=nonce
+        )
+    else:
+        env = load_quote_fixture(quote_fixture)
+        try:
+            report_data_expected = parse_report_data(env.report_data_hex).raw
+        except Exception:
+            report_data_expected = None
+
+    result = verify_offline_fixture_file(
+        quote_fixture,
+        policy=policy,
+        report_data_expected=report_data_expected,
+        job_id=job_id,
+        image_digest=image_digest,
+        nonce=nonce,
+    )
+    typer.echo(json.dumps(result.to_public(), indent=2, sort_keys=True))
+    raise typer.Exit(code=0 if result.is_valid else 1)
 
 
 @fabric_report_app.command("show")

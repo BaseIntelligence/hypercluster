@@ -52,6 +52,17 @@ class HyperSettings(BaseSettings):
     tee_live: bool = False
     tee_bonus_tdx: float = Field(default=1.08, ge=1.0)
     tee_bonus_tdx_gpu: float = Field(default=1.20, ge=1.0)
+    # TEE offline verify policy (VAL-TEE-004 / VAL-TEE-016).
+    # Env: HYPER_TEE_TCB_ENFORCE, HYPER_TEE_ACCEPTABLE_TCB,
+    # HYPER_TEE_DISALLOWED_ADVISORIES, HYPER_COMPOSE_HASH_ALLOWLIST.
+    tee_tcb_enforce: bool = True
+    tee_acceptable_tcb: str = Field(default="UpToDate")
+    tee_disallowed_advisories: str = Field(default="")
+    compose_hash_allowlist: str = Field(
+        default=(
+            "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
+        ),
+    )
     weight_push_interval_s: float = Field(default=120.0, ge=1.0)
     score_window_attempts: int = Field(default=50, ge=1)
     efficiency_floor: float = Field(default=0.0, ge=0.0)
@@ -105,6 +116,18 @@ class HyperSettings(BaseSettings):
     max_concurrent_world_size_budget: int = Field(default=64, ge=1)
     # How long a job may wait in placing without capacity (seconds).
     capacity_wait_timeout_s: float = Field(default=2.0, ge=0.0)
+
+    def _split_csv(self, raw: str) -> list[str]:
+        return [part.strip() for part in (raw or "").split(",") if part.strip()]
+
+    def compose_hash_allowlist_set(self) -> set[str]:
+        return set(self._split_csv(self.compose_hash_allowlist))
+
+    def tee_disallowed_advisories_set(self) -> set[str]:
+        return set(self._split_csv(self.tee_disallowed_advisories))
+
+    def tee_acceptable_tcb_set(self) -> set[str]:
+        return set(self._split_csv(self.tee_acceptable_tcb)) or {"UpToDate"}
 
 
 @lru_cache(maxsize=1)

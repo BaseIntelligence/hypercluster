@@ -1,0 +1,24 @@
+{
+  "advisory_ids": [],
+  "compose_hash": "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab",
+  "event_log": "eventlog:v1:rtmr3:ok",
+  "event_log_ok": true,
+  "expected_compose_hash": "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab",
+  "fixture_id": "positive_tdx_v1",
+  "gpu_evidence": null,
+  "image_digest": "sha256:sim000000000000000000000000000000000000000000000000000000000001",
+  "job_id": "job-offline-positive-0001",
+  "kind": "hypercluster.offline_quote.v1",
+  "nonce": "n0nce-posit1ve-aaaa-bbbb-cccc-111111111111",
+  "os_image_hash": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "quote_sig_ok": true,
+  "quote_version": 1,
+  "report_data_hex": "67e56eca362f1762e7b7d203f2cc85ed2271d8a2edd3d86635d952af1a621c240d274308cef3115f74df99e02a4ad588b44972495666742d68df52a129acf2ef",
+  "tcb_status": "UpToDate",
+  "tee_type": "tdx",
+  "vm_config": {
+    "cpu": 4,
+    "mem_gb": 16,
+    "tee": "tdx"
+  }
+}

@@ -90,6 +90,11 @@ class HyperSettings(BaseSettings):
     sim_auto_capacity: bool = True
     # Forced launch failure for integrity tests (VAL-JOB-018).
     sim_launch_fail: bool = False
+    # Launcher honesty injects (VAL-FAB-013/014/015/025).
+    sim_launch_timeout: bool = False
+    sim_launch_inject_sleep_s: float = Field(default=0.0, ge=0.0)
+    sim_honesty_level: str = Field(default="l1")  # l0|l1|l2
+    sim_inventory_spoof: bool = False
     # Concurrent multi-node / large-job budget (VAL-JOB-015).
     max_concurrent_large_jobs: int = Field(default=4, ge=1)
     large_job_world_size_threshold: int = Field(default=4, ge=1)

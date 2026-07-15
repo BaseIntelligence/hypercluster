@@ -357,11 +357,13 @@ def evaluate_fabric_gate(
     actual_transport: str | None = None,
     reports: list[FabricReport] | None = None,
     eth_fallback_injected: bool = False,
+    inventory_spoof: bool = False,
     correctness_present: bool = True,
 ) -> FabricGateResult:
-    """Compute fabric_gate ∈ {0, 1} for scoring (VAL-FAB-002/012).
+    """Compute fabric_gate ∈ {0, 1} for scoring (VAL-FAB-002/012/025).
 
     Correctness alone does not restore fabric_gate when the fabric was lied about.
+    Inventory spoof (claimed IB devices absent at launch) zeroes fabric_gate.
     """
 
     _ = correctness_present  # may be non-zero correctness; fabric gate is independent
@@ -370,6 +372,11 @@ def evaluate_fabric_gate(
     required = (required_transport or ("ib" if mode == "ib" else "")).strip().lower()
     actual = (actual_transport or "").strip().lower()
     codes: list[str] = []
+
+    # VAL-FAB-025: spoofed inventory always zeros gate.
+    if inventory_spoof:
+        codes.append("inventory_spoof")
+        codes.append("claimed_ib_absent_at_launch")
 
     # Forbidden eth fallback under IB demand.
     if mode == "ib" or required in {"ib", "infiniband", "rdma"}:
@@ -389,7 +396,7 @@ def evaluate_fabric_gate(
             composite_zeroed=True,
             reason_codes=codes,
             required_transport=required or mode,
-            actual_transport=actual or "unknown",
+            actual_transport=actual or ("spoofed" if inventory_spoof else "unknown"),
         )
 
     # Non-IB modes: gate 1 when mode evaluation says ok.

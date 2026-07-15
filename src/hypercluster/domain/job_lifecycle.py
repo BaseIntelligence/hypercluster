@@ -245,39 +245,49 @@ def build_sim_fabric_report(
     *,
     job: Job,
     attempt_id: str | None,
+    rankmap: list[dict[str, Any]] | None = None,
+    reports: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """FabricReport-shaped payload for multi-node sim (VAL-JOB-021)."""
+    """FabricReport-shaped multi-node bundle for sim jobs (VAL-JOB-021 / VAL-FAB-024).
 
-    ib_devices: list[dict[str, Any]] = []
-    if job.fabric_mode in {"auto", "ib"}:
+    When ``rankmap`` is provided, bundles digests for each participating node so
+    ``|nodes|`` matches ``|unique node_ids in rankmap|``.
+    """
+
+    from hypercluster.fabric.report import bundle_job_fabric_report
+
+    effective_rankmap: list[dict[str, Any]]
+    if rankmap:
+        effective_rankmap = list(rankmap)
+    else:
+        # Synthetic pack-style stubs when no placement yet.
+        effective_rankmap = []
         for i in range(max(1, int(job.nnodes))):
-            ib_devices.append(
-                {
-                    "name": f"mlx5_{i}",
-                    "port": 1,
-                    "rate_gbps": 200.0,
-                    "state": "Active",
-                    "node_id": f"sim-node-{i}",
-                }
-            )
-    topo_text = f"sim-topo nnodes={job.nnodes} world={job.world_size} fabric={job.fabric_mode}"
-    gpu_topo_sha256 = hashlib.sha256(topo_text.encode()).hexdigest()
-    body = {
-        "job_id": job.id,
-        "attempt_id": attempt_id,
-        "nnodes": int(job.nnodes),
-        "world_size": int(job.world_size),
-        "fabric_mode": job.fabric_mode,
-        "ib_devices": ib_devices,
-        "ib_rate_gbps": 200.0 if ib_devices else None,
-        "gpu_topo_sha256": gpu_topo_sha256,
-        "numa_map": {f"gpu{i}": i % 2 for i in range(int(job.world_size))},
-        "nccl_version": "sim-2.21.5",
-        "eth_ifaces": ["lo", "eth0"],
-    }
-    report_digest = _sha256_hex(_canonical_json(body))
-    body["report_digest"] = report_digest
-    return body
+            for local in range(max(1, int(job.nproc_per_node))):
+                rank = len(effective_rankmap)
+                if rank >= int(job.world_size):
+                    break
+                effective_rankmap.append(
+                    {
+                        "rank": rank,
+                        "node_id": f"sim-node-{i}",
+                        "local_rank": local,
+                        "gpu_index": local,
+                    }
+                )
+            if len(effective_rankmap) >= int(job.world_size):
+                break
+
+    return bundle_job_fabric_report(
+        job_id=job.id,
+        attempt_id=attempt_id,
+        rankmap=effective_rankmap,
+        fabric_mode=job.fabric_mode,
+        world_size=int(job.world_size),
+        nnodes=int(job.nnodes),
+        reports=list(reports) if reports else None,
+        nccl_version="sim-2.21.5",
+    )
 
 
 async def get_placement(session: AsyncSession, job_id: str) -> JobPlacement | None:
@@ -781,14 +791,103 @@ async def _ensure_running_attempt(session: AsyncSession, job: Job) -> JobAttempt
     return attempt
 
 
-async def _collect_success(session: AsyncSession, job: Job, attempt: JobAttempt) -> None:
+async def _collect_success(
+    session: AsyncSession,
+    job: Job,
+    attempt: JobAttempt,
+    *,
+    hyper: Any | None = None,
+) -> None:
+    """Collect launch metrics + multi-node fabric bundle (VAL-FAB-013/014/015/024)."""
+
+    from hypercluster.domain.fabric_reports import load_latest_reports_for_nodes
+    from hypercluster.domain.leases import get_pod
+    from hypercluster.fabric.launcher import (
+        LaunchRequest,
+        placement_result_from_dicts,
+        sim_launch,
+    )
+
+    placement = await get_placement(session, job.id)
+    rankmap: list[dict[str, Any]] = list(placement.rankmap()) if placement is not None else []
+    nccl_env: dict[str, str] = dict(placement.nccl_env()) if placement is not None else {}
+    graph_digest = (placement.graph_digest if placement is not None else None) or ""
+    planner_version = (
+        placement.planner_version if placement is not None else PLANNER_VERSION
+    )
+
+    reports: list[Any] = []
+    if job.pod_id:
+        pod = await get_pod(session, job.pod_id)
+        if pod is not None:
+            member_ids = list(pod.node_ids())
+            if member_ids:
+                reports = await load_latest_reports_for_nodes(session, member_ids)
+
+    # Honesty injects from HyperSettings (sim knobs).
+    honesty_level = "l1"
+    inventory_spoof = False
+    inject_status: str | None = None
+    inject_sleep_s = 0.0
+    if hyper is not None:
+        honesty_level = str(getattr(hyper, "sim_honesty_level", "l1") or "l1")
+        inventory_spoof = bool(getattr(hyper, "sim_inventory_spoof", False))
+        if bool(getattr(hyper, "sim_launch_fail", False)):
+            inject_status = "failed"
+        if bool(getattr(hyper, "sim_launch_timeout", False)):
+            inject_status = "timeout"
+        inject_sleep_s = float(getattr(hyper, "sim_launch_inject_sleep_s", 0.0) or 0.0)
+
+    place_result = placement_result_from_dicts(
+        rankmap=rankmap
+        or [
+            {
+                "rank": r,
+                "node_id": f"sim-node-{r // max(1, int(job.nproc_per_node))}",
+                "local_rank": r % max(1, int(job.nproc_per_node)),
+                "gpu_index": r % max(1, int(job.nproc_per_node)),
+            }
+            for r in range(int(job.world_size))
+        ],
+        nccl_env=nccl_env,
+        planner_version=planner_version,
+        graph_digest=graph_digest or "sha256:" + ("0" * 64),
+        job_id=job.id,
+    )
+    if not rankmap:
+        rankmap = [b.to_public() for b in place_result.rankmap]
+
+    launch_result = sim_launch(
+        LaunchRequest(
+            placement=place_result,
+            image_digest=job.image_digest,
+            entrypoint=list(job.entrypoint()),
+            env=dict(job.env() or {}),
+            timeout_s=int(job.timeout_s),
+            fabric_mode=job.fabric_mode or "auto",
+            honesty_level=honesty_level if honesty_level in {"l0", "l1", "l2"} else "l1",  # type: ignore[arg-type]
+            inject_status=inject_status,  # type: ignore[arg-type]
+            inject_sleep_s=inject_sleep_s,
+            inventory_spoof=inventory_spoof,
+            node_reports=list(reports),
+            seed=0,
+        )
+    )
+
+    fab = build_sim_fabric_report(
+        job=job,
+        attempt_id=attempt.id,
+        rankmap=rankmap,
+        reports=reports or None,
+    )
+
     # If provider already sealed results, keep digests (idempotent) and only
     # ensure fabric report / proof rows exist.
     if attempt.result_digest is not None and attempt.finished_at is not None:
         report = await get_fabric_report(session, job.id)
         if report is None and attempt.fabric_report_digest:
-            fab = build_sim_fabric_report(job=job, attempt_id=attempt.id)
-            fab["report_digest"] = attempt.fabric_report_digest
+            if "report_digest" not in fab or attempt.fabric_report_digest:
+                fab["report_digest"] = attempt.fabric_report_digest
             session.add(
                 JobFabricReport(
                     id=str(uuid.uuid4()),
@@ -818,13 +917,30 @@ async def _collect_success(session: AsyncSession, job: Job, attempt: JobAttempt)
             )
         return
 
-    fab = build_sim_fabric_report(job=job, attempt_id=attempt.id)
-    metrics = {
-        "allreduce_gbps": 18.0 * max(1, int(job.world_size)) / 4.0,
-        "efficiency": 0.92,
-        "wall_time_s": 0.05,
-        "source": "sim_launcher",
-    }
+    # Map LaunchResult status → attempt/job (VAL-FAB-014).
+    if launch_result.status == "failed":
+        attempt.status = JOB_STATUS_FAILED
+        attempt.failure_code = launch_result.failure_code or "sim_launch_fail"
+        attempt.metrics_json = json.dumps(launch_result.metrics_json())
+        attempt.fabric_report_digest = fab["report_digest"]
+        attempt.finished_at = utc_now()
+        job.status = JOB_STATUS_FAILED
+        job.failure_code = attempt.failure_code
+        job.finished_at = utc_now()
+        return
+
+    if launch_result.status == "timeout":
+        attempt.status = JOB_STATUS_TIMEOUT
+        attempt.failure_code = "timeout"
+        attempt.metrics_json = json.dumps(launch_result.metrics_json())
+        attempt.fabric_report_digest = fab["report_digest"]
+        attempt.finished_at = utc_now()
+        job.status = JOB_STATUS_TIMEOUT
+        job.failure_code = "timeout"
+        job.finished_at = utc_now()
+        return
+
+    metrics = launch_result.metrics_json()
     output_digest = _sha256_hex(
         _canonical_json(
             {
@@ -832,6 +948,7 @@ async def _collect_success(session: AsyncSession, job: Job, attempt: JobAttempt)
                 "attempt_no": attempt.attempt_no,
                 "entrypoint": job.entrypoint(),
                 "ok": True,
+                "fabric_artifact_digest": launch_result.fabric_artifact_digest,
             }
         )
     )
@@ -845,7 +962,9 @@ async def _collect_success(session: AsyncSession, job: Job, attempt: JobAttempt)
                 "output_digest": output_digest,
                 "proof_tier": SIM_PROOF_TIER,
                 "verified": True,
-                "failure_code": None,
+                "failure_code": launch_result.failure_code,
+                "fabric_gate": launch_result.fabric_gate,
+                "composite": launch_result.composite,
             }
         )
     )
@@ -855,6 +974,8 @@ async def _collect_success(session: AsyncSession, job: Job, attempt: JobAttempt)
     attempt.output_digest = output_digest
     attempt.result_digest = result_digest
     attempt.finished_at = utc_now()
+    if launch_result.failure_code:
+        attempt.failure_code = launch_result.failure_code
 
     proofs = await get_proofs_for_attempt(session, attempt.id)
     if not proofs:
@@ -863,8 +984,16 @@ async def _collect_success(session: AsyncSession, job: Job, attempt: JobAttempt)
                 id=str(uuid.uuid4()),
                 attempt_id=attempt.id,
                 proof_tier=SIM_PROOF_TIER,
-                payload_json=json.dumps({"sim": True, "tier": SIM_PROOF_TIER}),
-                verified=1,
+                payload_json=json.dumps(
+                    {
+                        "sim": True,
+                        "tier": SIM_PROOF_TIER,
+                        "fabric_gate": launch_result.fabric_gate,
+                        "composite": launch_result.composite,
+                        "integrity_fail": launch_result.integrity_fail,
+                    }
+                ),
+                verified=0 if launch_result.integrity_fail else 1,
                 verify_mode="sim",
             )
         )
@@ -1110,7 +1239,7 @@ async def advance_job_one_step(
         if attempt is None:
             attempt = await _ensure_running_attempt(session, job)
             await session.flush()
-        await _collect_success(session, job, attempt)
+        await _collect_success(session, job, attempt, hyper=hyper)
     if nxt == JOB_STATUS_SUCCEEDED:
         job.finished_at = utc_now()
         job.failure_code = None

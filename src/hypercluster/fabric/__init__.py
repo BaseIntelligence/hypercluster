@@ -27,6 +27,14 @@ from hypercluster.fabric.gates import (
     evaluate_require_ib_nodes,
     has_active_ib_devices,
 )
+from hypercluster.fabric.launcher import (
+    LAUNCHER_VERSION,
+    EfficiencyMetrics,
+    LaunchRequest,
+    LaunchResult,
+    sim_launch,
+    synthetic_allreduce_metrics,
+)
 from hypercluster.fabric.planner import (
     PLANNER_VERSION,
     PlacementRequest,
@@ -36,23 +44,34 @@ from hypercluster.fabric.planner import (
     place_ranks,
     rankmap_as_dicts,
 )
+from hypercluster.fabric.report import (
+    BUNDLE_VERSION,
+    bundle_job_fabric_report,
+    validate_bundle_completeness,
+)
 
 __all__ = [
+    "BUNDLE_VERSION",
     "DIGEST_PREFIX",
     "IB_RATE_MISMATCH_POLICY",
+    "LAUNCHER_VERSION",
     "PLANNER_NCCL_ENV_VERSION",
     "PLANNER_VERSION",
     "ClusterFabricEvaluation",
+    "EfficiencyMetrics",
     "FabricGateResult",
     "FabricModeEvaluation",
     "FabricReport",
     "IbDevice",
+    "LaunchRequest",
+    "LaunchResult",
     "PlacementRequest",
     "PlacementResult",
     "RankBinding",
     "RequireIbCheck",
     "build_fabric_report",
     "build_nccl_env_for_mode",
+    "bundle_job_fabric_report",
     "canonical_report_payload",
     "compute_placement_graph_digest",
     "compute_report_digest",
@@ -63,7 +82,10 @@ __all__ = [
     "has_active_ib_devices",
     "place_ranks",
     "rankmap_as_dicts",
+    "sim_launch",
+    "synthetic_allreduce_metrics",
     "synthetic_ib_devices",
     "synthetic_nvlink_topo_matrix",
     "validate_accepted_report",
+    "validate_bundle_completeness",
 ]

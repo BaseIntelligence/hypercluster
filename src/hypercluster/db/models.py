@@ -702,7 +702,15 @@ class JobFabricReport(Base):
                 numa_map = json.loads(self.numa_map_json)
             except (TypeError, ValueError):
                 numa_map = self.numa_map_json
-        return {
+        raw: dict[str, Any] = {}
+        if self.raw_json:
+            try:
+                parsed = json.loads(self.raw_json)
+                if isinstance(parsed, dict):
+                    raw = parsed
+            except (TypeError, ValueError):
+                raw = {}
+        body: dict[str, Any] = {
             "id": self.id,
             "job_id": self.job_id,
             "attempt_id": self.attempt_id,
@@ -716,6 +724,19 @@ class JobFabricReport(Base):
             "fabric_report_digest": self.report_digest,
             "created_at": isoformat_utc(self.created_at),
         }
+        # Surface multi-node bundle fields for completeness (VAL-FAB-024).
+        for key in (
+            "nodes",
+            "node_ids",
+            "node_count",
+            "bundle_version",
+            "nnodes",
+            "world_size",
+            "fabric_mode",
+        ):
+            if key in raw:
+                body[key] = raw[key]
+        return body
 
 
 class FabricReportRow(Base):

@@ -39,8 +39,20 @@ nodes_app = typer.Typer(
     no_args_is_help=True,
     help="Provider node register / heartbeat / fabric-scan.",
 )
+fabric_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Fabric plan dry-run and multi-node report views.",
+)
+fabric_report_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Show fabric report digests for jobs.",
+)
 app.add_typer(sim_app, name="sim")
 app.add_typer(nodes_app, name="nodes")
+app.add_typer(fabric_app, name="fabric")
+fabric_app.add_typer(fabric_report_app, name="report")
 
 
 def default_base_url() -> str:
@@ -336,6 +348,130 @@ def nodes_fabric_scan_cmd(
         typer.echo("fabric-scan response missing report_digest", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"accepted report_digest={digest} node_id={payload.get('node_id')}")
+    raise typer.Exit(code=0)
+
+
+@fabric_app.command("plan")
+def fabric_plan_cmd(
+    job_id: str | None = typer.Option(
+        None,
+        "--job-id",
+        help="Optional job id to load world_size/nnodes (dry-run; no mutual job mutate)",
+    ),
+    world_size: int = typer.Option(4, "--world-size", help="World size for plan (spec path)"),
+    nnodes: int = typer.Option(2, "--nnodes", help="Target node count upper bound"),
+    nproc_per_node: int = typer.Option(2, "--nproc-per-node", help="Processes per node"),
+    policy: str = typer.Option("pack", "--policy", help="pack|spread"),
+    fabric: str = typer.Option("auto", "--fabric", help="auto|ib|eth|nvlink_only"),
+    seed: int = typer.Option(0, "--seed", help="Sim inventory seed"),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Dry-run only (default): never launches ranks or mutates job state",
+    ),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+) -> None:
+    """Topology plan dry-run (VAL-FAB-016). Never advances job to running."""
+
+    from hypercluster.fabric.planner import PlacementRequest, place_ranks
+    from hypercluster.sim.inventory import seed_sim_inventory
+
+    _ = dry_run  # dry-run is always true for this command surface
+    job_payload: dict[str, Any] | None = None
+    if job_id:
+        base = _resolve_base_url(url, host, port)
+        try:
+            response = httpx.get(f"{base}/v1/jobs/{job_id}", timeout=10.0)
+            if response.status_code >= 400:
+                typer.echo(
+                    f"fabric plan: failed to load job {job_id}: "
+                    f"{response.status_code} {response.text}",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            job_payload = response.json()
+        except typer.Exit:
+            raise
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            typer.echo(f"fabric plan: failed to load job {job_id}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        world_size = int(job_payload.get("world_size") or world_size)
+        nnodes = int(job_payload.get("nnodes") or nnodes)
+        nproc_per_node = int(job_payload.get("nproc_per_node") or nproc_per_node)
+        policy = str(job_payload.get("placement_policy") or policy)
+        fabric = str(job_payload.get("fabric_mode") or job_payload.get("fabric") or fabric)
+
+    inv = seed_sim_inventory(
+        seed=seed,
+        node_count=max(nnodes, 2),
+        gpus_per_node=max(nproc_per_node, 1),
+    )
+    plan = place_ranks(
+        PlacementRequest(
+            job_id=job_id or f"dry-run-{seed}",
+            world_size=world_size,
+            nnodes=nnodes,
+            nproc_per_node=nproc_per_node,
+            policy=policy if policy in {"pack", "spread"} else "pack",  # type: ignore[arg-type]
+            fabric=fabric if fabric in {"auto", "ib", "eth", "nvlink_only"} else "auto",  # type: ignore[arg-type]
+            node_reports=inv.reports(),
+        )
+    )
+    out = {
+        "ok": plan.ok,
+        "dry_run": True,
+        "job_id": job_id,
+        "rankmap": [b.to_public() for b in plan.rankmap],
+        "nccl_env": dict(plan.nccl_env),
+        "planner_version": plan.planner_version,
+        "graph_digest": plan.graph_digest,
+        "nnodes_used": plan.nnodes_used,
+        "policy": plan.policy,
+        "fabric": plan.fabric,
+        "reason": plan.reason,
+        "failure_code": plan.failure_code,
+        "job_status_unchanged": True,
+    }
+    typer.echo(json.dumps(out, indent=2, sort_keys=True))
+    if not plan.ok:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@fabric_report_app.command("show")
+def fabric_report_show_cmd(
+    job_id: str = typer.Option(..., "--job-id", help="Completed job id"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+) -> None:
+    """Echo fabric report_digest for a completed job (VAL-FAB-017)."""
+
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(f"{base}/v1/jobs/{job_id}/fabric-report", timeout=10.0)
+    except httpx.HTTPError as exc:
+        typer.echo(f"fabric report show failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"{response.status_code} {response.text}")
+    if response.status_code != 200:
+        raise typer.Exit(code=1)
+    try:
+        payload = response.json()
+    except ValueError:
+        typer.echo("fabric report body is not JSON", err=True)
+        raise typer.Exit(code=1) from None
+
+    digest = payload.get("report_digest") or payload.get("fabric_report_digest")
+    if not digest:
+        typer.echo("fabric report missing report_digest", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"report_digest={digest}")
+    if payload.get("nodes"):
+        typer.echo(f"node_count={len(payload['nodes'])}")
     raise typer.Exit(code=0)
 
 

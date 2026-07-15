@@ -17,3 +17,6 @@ secrets/
 *.key
 dist/
 *.egg-info/
+# Staged only for local docker builds (copied from platform/dist); never commit.
+docker/vendor/*.whl
+!docker/vendor/.gitkeep

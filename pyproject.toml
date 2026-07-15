@@ -5,7 +5,8 @@ description = "Hypercluster compute power challenge for BASE Intelligence"
 requires-python = ">=3.12"
 dependencies = [
   "aiosqlite>=0.20.0",
-  "base",
+  # Ship pin (matches prism / release wheel). Local `uv` overrides via tool.uv.sources.
+  "base @ https://github.com/BaseIntelligence/base/releases/download/v3.1.2/base-3.1.2-py3-none-any.whl#sha256=3a61c2d3a343ed6de55e80215486e3de0c9639276443d08f2ed316bc807f2ff0",
   "fastapi>=0.115.0",
   "httpx>=0.27.0",
   "pydantic>=2.8.0",

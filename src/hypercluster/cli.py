@@ -1,7 +1,7 @@
-"""Hypercluster Typer CLI — scaffold health/version + sim doctor/smoke.
+"""Hypercluster Typer CLI — packaging core + domain subcommands.
 
-Architecture outline (expanded in later milestones):
-  serve, version, health --url, marketplace, nodes, jobs, fabric, attest,
+Groups (VAL-CLI-001):
+  serve, version, health --url, db, marketplace, nodes, jobs, fabric, attest,
   score, weights, sim {seed, run-scenario, doctor}
 """
 
@@ -16,14 +16,18 @@ import httpx
 import typer
 
 from hypercluster import __version__
-from hypercluster.sim.ports import (
-    DEFAULT_BAREMETAL_PORT,
-    assert_mission_port,
-    is_mission_port,
-    parse_port_from_url,
+from hypercluster.cli_common import (
+    DEFAULT_BASE_URL,
+    require_mutate_auth,
+    resolve_base_url,
 )
-
-DEFAULT_BASE_URL = f"http://127.0.0.1:{DEFAULT_BAREMETAL_PORT}"
+from hypercluster.cli_ops import (
+    db_app,
+    jobs_app,
+    marketplace_app,
+    register_nodes_mutate,
+    register_serve,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -65,6 +69,11 @@ weights_app = typer.Typer(
     no_args_is_help=True,
     help="Raw weight preview and push (VAL-SCORE-020). Never set_weights.",
 )
+# Root groups (VAL-CLI-001 / packaging)
+register_serve(app)
+app.add_typer(db_app, name="db")
+app.add_typer(marketplace_app, name="marketplace")
+app.add_typer(jobs_app, name="jobs")
 app.add_typer(sim_app, name="sim")
 app.add_typer(nodes_app, name="nodes")
 app.add_typer(fabric_app, name="fabric")
@@ -72,6 +81,7 @@ app.add_typer(attest_app, name="attest")
 app.add_typer(score_app, name="score")
 app.add_typer(weights_app, name="weights")
 fabric_app.add_typer(fabric_report_app, name="report")
+register_nodes_mutate(nodes_app)
 
 
 def default_base_url() -> str:
@@ -101,20 +111,12 @@ def _resolve_base_url(
 ) -> str:
     """Resolve CLI base URL from --url or host/port defaults."""
 
-    if url:
-        resolved = url.rstrip("/")
-        port_from_url = parse_port_from_url(resolved)
-        if enforce_mission_port and port_from_url is not None and not is_mission_port(
-            port_from_url
-        ):
-            assert_mission_port(port_from_url)
-        return resolved
-
-    resolved_host = host or "127.0.0.1"
-    resolved_port = DEFAULT_BAREMETAL_PORT if port is None else int(port)
-    if enforce_mission_port:
-        assert_mission_port(resolved_port)
-    return f"http://{resolved_host}:{resolved_port}"
+    return resolve_base_url(
+        url,
+        host,
+        port,
+        enforce_mission_port=enforce_mission_port,
+    )
 
 
 def _url_option() -> Any:
@@ -163,8 +165,7 @@ def version_cmd(
         raise typer.Exit(code=1)
     if challenge_version and challenge_version != __version__:
         typer.echo(
-            f"warning: package {__version__} != live challenge_version "
-            f"{challenge_version}",
+            f"warning: package {__version__} != live challenge_version {challenge_version}",
             err=True,
         )
     raise typer.Exit(code=0)
@@ -310,59 +311,29 @@ def nodes_fabric_scan_cmd(
         help="Challenge shared token (or CHALLENGE_SHARED_TOKEN env)",
     ),
 ) -> None:
-    """Run fabric-scan for a node and print the accepted FabricReport (VAL-FAB-018)."""
+    """Run fabric-scan for a node and print the accepted FabricReport (VAL-FAB-018).
 
-    from hypercluster.api.auth import build_signed_headers
+    Incomplete auth fails closed (VAL-CLI-021); --node-id required (VAL-CLI-026).
+    """
 
+    from hypercluster.cli_common import http_request, parse_json_response
+
+    # Fail closed when hotkey/token incomplete — never invent quiet signer identity.
+    resolved_hotkey, resolved_token = require_mutate_auth(hotkey=hotkey, token=token)
     base = _resolve_base_url(url, host, port)
-    resolved_hotkey = (
-        hotkey
-        or os.environ.get("HYPER_HOTKEY")
-        or os.environ.get("CHALLENGE_HOTKEY")
-        or "sim-fab-cli-hotkey"
-    )
-    resolved_token = (
-        token
-        or os.environ.get("CHALLENGE_SHARED_TOKEN")
-        or os.environ.get("HYPER_SHARED_TOKEN")
-        or ""
-    )
-    if not resolved_token:
-        typer.echo(
-            "fabric-scan requires --token or CHALLENGE_SHARED_TOKEN for signed request",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
     body = {"source": source, "seed": seed}
-    raw = json.dumps(body).encode()
-    headers = build_signed_headers(
-        secret=resolved_token,
+    response = http_request(
+        "POST",
+        f"{base}/v1/nodes/{node_id}/fabric-scan",
+        json_body=body,
+        signed=True,
         hotkey=resolved_hotkey,
-        body=raw,
+        token=resolved_token,
+        expect_statuses={200},
     )
-    headers["Content-Type"] = "application/json"
-    try:
-        response = httpx.post(
-            f"{base}/v1/nodes/{node_id}/fabric-scan",
-            content=raw,
-            headers=headers,
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"fabric-scan failed for {base}: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-
     typer.echo(f"{response.status_code} {response.text}")
-    if response.status_code == 404:
-        raise typer.Exit(code=1)
-    if response.status_code >= 400:
-        raise typer.Exit(code=1)
-    try:
-        payload = response.json()
-    except ValueError:
-        raise typer.Exit(code=1) from None
-    digest = payload.get("report_digest")
+    payload = parse_json_response(response)
+    digest = payload.get("report_digest") if isinstance(payload, dict) else None
     if not digest:
         typer.echo("fabric-scan response missing report_digest", err=True)
         raise typer.Exit(code=1)
@@ -630,9 +601,7 @@ def attest_verify_offline_cmd(
     policy = (
         TeeVerifyPolicy(
             compose_allowlist=base_policy.compose_allowlist,
-            tcb_enforce=bool(tcb_enforce)
-            if tcb_enforce is not None
-            else base_policy.tcb_enforce,
+            tcb_enforce=bool(tcb_enforce) if tcb_enforce is not None else base_policy.tcb_enforce,
             acceptable_tcb_statuses=base_policy.acceptable_tcb_statuses,
             disallowed_advisory_ids=base_policy.disallowed_advisory_ids,
         )
@@ -700,11 +669,7 @@ def fabric_report_show_cmd(
 
 
 def _shared_token_opt() -> str:
-    return (
-        os.environ.get("CHALLENGE_SHARED_TOKEN")
-        or os.environ.get("HYPER_SHARED_TOKEN")
-        or ""
-    )
+    return os.environ.get("CHALLENGE_SHARED_TOKEN") or os.environ.get("HYPER_SHARED_TOKEN") or ""
 
 
 @score_app.command("show")

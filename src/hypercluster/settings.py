@@ -61,6 +61,10 @@ class HyperSettings(BaseSettings):
     allow_insecure_signatures: bool = True
     signature_ttl_seconds: int = Field(default=300, ge=30)
     node_liveness_seconds: int = Field(default=120, ge=5)
+    # Marketplace offer hard caps (VAL-MKT-010 / VAL-MKT-011).
+    # Env: HYPER_MAX_OFFER_PRICE_PER_HOUR, HYPER_MAX_OFFER_LIFETIME_HOURS.
+    max_offer_price_per_hour: float = Field(default=1000.0, gt=0)
+    max_offer_lifetime_hours: float = Field(default=720.0, gt=0)
 
 
 @lru_cache(maxsize=1)

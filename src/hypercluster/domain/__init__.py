@@ -13,6 +13,20 @@ from hypercluster.domain.nodes import (
     node_to_public,
     register_node,
 )
+from hypercluster.domain.offers import (
+    DEFAULT_MAX_OFFER_LIFETIME_HOURS,
+    DEFAULT_MAX_OFFER_PRICE_PER_HOUR,
+    OFFER_STATUS_LISTED,
+    OFFER_STATUS_WITHDRAWN,
+    OfferError,
+    create_offer,
+    get_offer,
+    list_offers,
+    offer_to_public,
+    validate_lifetime,
+    validate_price,
+    withdraw_offer,
+)
 from hypercluster.domain.providers import (
     ProviderError,
     get_provider,
@@ -24,20 +38,32 @@ from hypercluster.domain.providers import (
 )
 
 __all__ = [
+    "DEFAULT_MAX_OFFER_LIFETIME_HOURS",
+    "DEFAULT_MAX_OFFER_PRICE_PER_HOUR",
     "DEFAULT_NODE_LIVENESS_SECONDS",
+    "OFFER_STATUS_LISTED",
+    "OFFER_STATUS_WITHDRAWN",
     "NodeError",
+    "OfferError",
     "ProviderError",
+    "create_offer",
     "get_node",
+    "get_offer",
     "get_provider",
     "get_provider_by_hotkey",
     "list_nodes",
+    "list_offers",
     "list_providers",
     "mark_stale_nodes_offline",
     "node_has_ib",
     "node_heartbeat",
     "node_to_public",
+    "offer_to_public",
     "provider_heartbeat",
     "provider_to_public",
     "register_node",
     "register_provider",
+    "validate_lifetime",
+    "validate_price",
+    "withdraw_offer",
 ]

@@ -4,8 +4,8 @@ Identity routes (`/health`, `/ready`, `/version`) are installed by
 `create_challenge_app` and are not registered here. Internal routes under
 `/internal/*` are owned by the SDK factory and must never carry `@public_route`.
 
-Marketplace providers/nodes land here (VAL-MKT-001..007). Later features add
-offers/leases/pods on the same router.
+Marketplace providers/nodes/offers (VAL-MKT-001..012, 025..029). Later features
+add leases/pods rent path on the same router.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from base.challenge_sdk import public_route
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from hypercluster.api.auth import DbSession, RequireMiner
@@ -24,6 +24,18 @@ from hypercluster.domain.nodes import (
     node_heartbeat,
     node_to_public,
     register_node,
+)
+from hypercluster.domain.offers import (
+    DEFAULT_MAX_OFFER_LIFETIME_HOURS,
+    DEFAULT_MAX_OFFER_PRICE_PER_HOUR,
+    OFFER_STATUS_LISTED,
+    OfferError,
+    create_offer,
+    get_offer,
+    list_offers,
+    offer_to_public,
+    parse_require_ib_query,
+    withdraw_offer,
 )
 from hypercluster.domain.providers import (
     ProviderError,
@@ -58,8 +70,41 @@ class NodeHeartbeatRequest(BaseModel):
     node_id: str | None = Field(default=None, max_length=36)
 
 
+class OfferCreateRequest(BaseModel):
+    """Offer publish body; price/lifetime hard guards also enforced in domain."""
+
+    node_ids: list[str] = Field(..., min_length=1)
+    # Optional on the wire so missing keys surface as domain 422 codes (not body-schema),
+    # matching VAL-MKT-009 matrix of "missing price/lifetime".
+    price_per_hour: float | None = Field(default=None)
+    max_lifetime_hours: float | None = Field(default=None)
+    mode: str = Field(default="single", max_length=16)
+    require_ib: bool = False
+    tee: str | None = Field(default=None, max_length=32)
+    gpu_model: str | None = Field(default=None, max_length=128)
+    gpu_count: int | None = Field(default=None, ge=1)
+    location_hint: str | None = Field(default=None, max_length=128)
+    metadata: dict[str, Any] | None = None
+
+
 def _header_hotkey(request: Request) -> str | None:
     return request.headers.get("x-hotkey") or request.headers.get("X-Hotkey")
+
+
+def _offer_caps(request: Request) -> tuple[float, float]:
+    """Read system offer caps from HyperSettings (env-tunable)."""
+
+    hyper = getattr(request.app.state, "hyper_settings", None)
+    price_cap = DEFAULT_MAX_OFFER_PRICE_PER_HOUR
+    lifetime_cap = DEFAULT_MAX_OFFER_LIFETIME_HOURS
+    if hyper is not None:
+        price_cap = float(
+            getattr(hyper, "max_offer_price_per_hour", price_cap) or price_cap
+        )
+        lifetime_cap = float(
+            getattr(hyper, "max_offer_lifetime_hours", lifetime_cap) or lifetime_cap
+        )
+    return price_cap, lifetime_cap
 
 
 @public_route(tags=["marketplace"])
@@ -228,11 +273,122 @@ async def nodes_get(
 
 
 @public_route(tags=["marketplace"])
-@router.get("/v1/offers")
-async def list_offers() -> dict[str, list[object]]:
-    """Browse marketplace offers (scaffold; domain logic lands in later M2)."""
+@router.post("/v1/offers", status_code=status.HTTP_200_OK)
+async def offers_create(
+    body: OfferCreateRequest,
+    identity: RequireMiner,
+    session: DbSession,
+    request: Request,
+) -> dict[str, Any]:
+    """Publish capacity offer with hard price/lifetime guards (VAL-MKT-008..011)."""
 
-    return {"items": []}
+    price_cap, lifetime_cap = _offer_caps(request)
+    try:
+        offer = await create_offer(
+            session,
+            hotkey=identity.hotkey,
+            node_ids=body.node_ids,
+            price_per_hour=body.price_per_hour,
+            max_lifetime_hours=body.max_lifetime_hours,
+            mode=body.mode,
+            require_ib=body.require_ib,
+            tee=body.tee,
+            gpu_model=body.gpu_model,
+            gpu_count=body.gpu_count,
+            location_hint=body.location_hint,
+            metadata=body.metadata,
+            max_price_cap=price_cap,
+            max_lifetime_cap=lifetime_cap,
+        )
+    except OfferError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return offer_to_public(offer)
+
+
+@public_route(tags=["marketplace"])
+@router.get("/v1/offers")
+async def offers_list(
+    session: DbSession,
+    gpu_model: str | None = Query(default=None),
+    require_ib: str | None = Query(default=None),
+    tee: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    mode: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Browse marketplace offers with composable filters (VAL-MKT-025..029).
+
+    Default status is ``listed`` (rentable catalog). Pass ``status`` to override
+    (e.g. ``withdrawn``). Capability filters compose AND with status.
+    """
+
+    # Default browse: listed only so withdrawn/leased never reappear as rentable.
+    status_value: str | None
+    if status_filter is None:
+        status_value = OFFER_STATUS_LISTED
+    elif status_filter.strip().lower() in {"", "all", "*"}:
+        status_value = None
+    else:
+        status_value = status_filter.strip().lower()
+
+    try:
+        require_ib_flag = parse_require_ib_query(require_ib)
+        items = await list_offers(
+            session,
+            status=status_value,
+            gpu_model=gpu_model,
+            require_ib=require_ib_flag,
+            tee=tee,
+            mode=mode,
+        )
+    except OfferError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return {"items": [offer_to_public(o) for o in items]}
+
+
+@public_route(tags=["marketplace"])
+@router.get("/v1/offers/{offer_id}")
+async def offers_get(
+    offer_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Get a single offer by id (any status)."""
+
+    offer = await get_offer(session, offer_id)
+    if offer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "offer_not_found", "message": "offer not found"},
+        )
+    return offer_to_public(offer)
+
+
+@public_route(tags=["marketplace"])
+@router.delete("/v1/offers/{offer_id}")
+async def offers_withdraw(
+    offer_id: str,
+    identity: RequireMiner,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Withdraw listing (VAL-MKT-012); owner-only; fail-closed under active lease."""
+
+    try:
+        offer = await withdraw_offer(
+            session,
+            hotkey=identity.hotkey,
+            offer_id=offer_id,
+        )
+    except OfferError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return offer_to_public(offer)
 
 
 @public_route(tags=["jobs"])
@@ -254,11 +410,14 @@ async def leaderboard() -> dict[str, list[object]]:
 __all__ = [
     "leaderboard",
     "list_jobs",
-    "list_offers",
     "nodes_get",
     "nodes_heartbeat",
     "nodes_list",
     "nodes_register",
+    "offers_create",
+    "offers_get",
+    "offers_list",
+    "offers_withdraw",
     "providers_heartbeat",
     "providers_list",
     "providers_me",

@@ -1,10 +1,11 @@
-"""SQLAlchemy models for marketplace identity (providers / nodes).
+"""SQLAlchemy models for marketplace identity (providers / nodes / offers).
 
-Schema aligns with architecture.md §3.1 (providers, nodes, nonces).
+Schema aligns with architecture.md §3.1 (providers, nodes, offers, nonces).
 """
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -150,6 +151,84 @@ class Node(Base):
         }
 
 
+class Offer(Base):
+    """Home-grown marketplace listing (Lium-shaped capacity snapshot).
+
+    Status lifecycle (M2): listed → withdrawn | leased | expired.
+    Price/lifetime hard guards enforced in domain layer (VAL-MKT-008..011).
+    """
+
+    __tablename__ = "offers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("providers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # JSON list of node id strings (one node or multi-node cluster set).
+    node_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="single")
+    gpu_model: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    require_ib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tee: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    price_per_hour: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lifetime_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    location_hint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # listed|leased|expired|withdrawn
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="listed", index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def node_ids(self) -> list[str]:
+        try:
+            raw = json.loads(self.node_ids_json)
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        return [str(x) for x in raw]
+
+    def to_dict(self) -> dict[str, Any]:
+        meta: Any = None
+        if self.metadata_json:
+            try:
+                meta = json.loads(self.metadata_json)
+            except (TypeError, ValueError):
+                meta = self.metadata_json
+        return {
+            "id": self.id,
+            "provider_id": self.provider_id,
+            "node_ids": self.node_ids(),
+            "mode": self.mode,
+            "gpu_model": self.gpu_model,
+            "gpu_count": self.gpu_count,
+            "node_count": self.node_count,
+            "require_ib": bool(self.require_ib),
+            "tee": self.tee,
+            "price_per_hour": float(self.price_per_hour),
+            "max_lifetime_hours": float(self.max_lifetime_hours),
+            "location_hint": self.location_hint,
+            "status": self.status,
+            "metadata": meta,
+            "created_at": isoformat_utc(self.created_at),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+
+
 class RequestNonce(Base):
     """Replay protection for signed miner requests."""
 
@@ -170,6 +249,7 @@ class RequestNonce(Base):
 
 __all__ = [
     "Node",
+    "Offer",
     "Provider",
     "RequestNonce",
     "isoformat_utc",

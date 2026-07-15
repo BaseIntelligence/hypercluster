@@ -419,7 +419,9 @@ def test_scaffold_public_routes_use_public_route_decorator() -> None:
     from hypercluster.api import public as public_mod
 
     # Endpoints defined on the module must use the Base marker.
-    offers = getattr(public_mod, "list_offers", None)
+    offers = getattr(public_mod, "offers_list", None) or getattr(
+        public_mod, "list_offers", None
+    )
     jobs = getattr(public_mod, "list_jobs", None)
     assert offers is not None and jobs is not None
     assert is_public_route(offers)

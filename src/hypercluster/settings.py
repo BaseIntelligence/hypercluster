@@ -65,6 +65,20 @@ class HyperSettings(BaseSettings):
     # Env: HYPER_MAX_OFFER_PRICE_PER_HOUR, HYPER_MAX_OFFER_LIFETIME_HOURS.
     max_offer_price_per_hour: float = Field(default=1000.0, gt=0)
     max_offer_lifetime_hours: float = Field(default=720.0, gt=0)
+    # Job admit static gates (VAL-JOB-001..003). Comma-separated digests allowlist.
+    # Env: HYPER_JOB_IMAGE_ALLOWLIST, HYPER_MAX_JOB_* .
+    job_image_allowlist: str = Field(
+        default=(
+            "sha256:sim000000000000000000000000000000000000000000000000000000000001,"
+            "sha256:cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe,"
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ),
+    )
+    max_job_world_size: int = Field(default=64, ge=1)
+    max_job_nnodes: int = Field(default=16, ge=1)
+    max_job_nproc_per_node: int = Field(default=8, ge=1)
+    max_job_timeout_s: int = Field(default=86400, ge=1)
+    max_job_gpu_budget: int = Field(default=128, ge=1)
 
 
 @lru_cache(maxsize=1)

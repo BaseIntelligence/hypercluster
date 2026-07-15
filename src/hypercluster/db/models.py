@@ -362,6 +362,133 @@ class Pod(Base):
         }
 
 
+class Job(Base):
+    """Modal-like HyperJob lifecycle row (architecture §3.1 / §6).
+
+    Admit-phase statuses: submitted → admitted (static gates).
+    Later M3 features advance: placing → provisioning → running → collecting
+    → scoring → terminal (succeeded|failed|cancelled|timeout).
+    Idempotency: unique (submitter_hotkey, client_request_id) when key present.
+    """
+
+    __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "submitter_hotkey",
+            "client_request_id",
+            name="uq_jobs_hotkey_client_request_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    submitter_hotkey: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    # Idempotency key from client; NULL when not supplied (SQLite UNIQUE
+    # treats NULLs as distinct so non-idempotent creates stay independent).
+    client_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True, default=None)
+    # admitted|placing|provisioning|running|collecting|scoring|
+    # succeeded|failed|cancelled|timeout (submitted may appear pre-admit in flight)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="admitted", index=True)
+    image_digest: Mapped[str] = mapped_column(String(256), nullable=False)
+    entrypoint_json: Mapped[str] = mapped_column(Text, nullable=False)
+    world_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    nnodes: Mapped[int] = mapped_column(Integer, nullable=False)
+    nproc_per_node: Mapped[int] = mapped_column(Integer, nullable=False)
+    backend: Mapped[str] = mapped_column(String(32), nullable=False, default="nccl")
+    fabric_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="auto")
+    tee_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    env_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resource_json: Mapped[str] = mapped_column(Text, nullable=False)
+    timeout_s: Mapped[int] = mapped_column(Integer, nullable=False)
+    placement_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="pack")
+    lease_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("leases.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    pod_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("pods.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    admitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def entrypoint(self) -> list[str]:
+        try:
+            raw = json.loads(self.entrypoint_json)
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(raw, list):
+            return []
+        return [str(x) for x in raw]
+
+    def env(self) -> dict[str, str] | None:
+        if not self.env_json:
+            return None
+        try:
+            raw = json.loads(self.env_json)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return {str(k): str(v) for k, v in raw.items()}
+
+    def resource(self) -> dict[str, Any]:
+        try:
+            raw = json.loads(self.resource_json)
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return dict(raw)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "job_id": self.id,
+            "submitter_hotkey": self.submitter_hotkey,
+            "client_request_id": self.client_request_id or None,
+            "status": self.status,
+            "image_digest": self.image_digest,
+            "entrypoint": self.entrypoint(),
+            "world_size": int(self.world_size),
+            "nnodes": int(self.nnodes),
+            "nproc_per_node": int(self.nproc_per_node),
+            "backend": self.backend,
+            "fabric": self.fabric_mode,
+            "fabric_mode": self.fabric_mode,
+            "tee": self.tee_mode,
+            "tee_mode": self.tee_mode,
+            "env": self.env(),
+            "resource": self.resource(),
+            "timeout_s": int(self.timeout_s),
+            "placement_policy": self.placement_policy,
+            "lease_id": self.lease_id,
+            "pod_id": self.pod_id,
+            "admitted_at": isoformat_utc(self.admitted_at),
+            "started_at": isoformat_utc(self.started_at),
+            "finished_at": isoformat_utc(self.finished_at),
+            "failure_code": self.failure_code,
+            "created_at": isoformat_utc(self.created_at),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+
+
 class RequestNonce(Base):
     """Replay protection for signed miner requests."""
 
@@ -381,6 +508,7 @@ class RequestNonce(Base):
 
 
 __all__ = [
+    "Job",
     "Lease",
     "Node",
     "Offer",

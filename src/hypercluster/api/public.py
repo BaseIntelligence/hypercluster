@@ -16,6 +16,16 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from hypercluster.api.auth import DbSession, RequireMiner
+from hypercluster.domain.jobs import (
+    JobError,
+    admit_job,
+    get_job,
+    job_to_public,
+    parse_image_allowlist,
+)
+from hypercluster.domain.jobs import (
+    list_jobs as list_jobs_for_hotkey,
+)
 from hypercluster.domain.leases import (
     LeaseError,
     get_lease,
@@ -108,6 +118,26 @@ class TerminateLeaseRequest(BaseModel):
     reason: str | None = Field(default="renter_cancel", max_length=256)
 
 
+class JobAdmitRequest(BaseModel):
+    """HyperJob admit body (architecture §6.1); static gates in domain."""
+
+    image_digest: str = Field(..., min_length=1, max_length=256)
+    entrypoint: list[str] = Field(..., min_length=1)
+    world_size: int = Field(..., ge=1)
+    nnodes: int = Field(..., ge=1)
+    nproc_per_node: int = Field(..., ge=1)
+    resource: dict[str, Any]
+    timeout_s: int = Field(..., ge=1)
+    client_request_id: str | None = Field(default=None, max_length=128)
+    backend: str = Field(default="nccl", max_length=32)
+    fabric: str = Field(default="auto", max_length=32)
+    tee: str = Field(default="none", max_length=32)
+    env: dict[str, str] | None = None
+    placement_policy: str = Field(default="pack", max_length=16)
+    lease_id: str | None = Field(default=None, max_length=36)
+    pod_id: str | None = Field(default=None, max_length=36)
+
+
 def _header_hotkey(request: Request) -> str | None:
     return request.headers.get("x-hotkey") or request.headers.get("X-Hotkey")
 
@@ -119,13 +149,38 @@ def _offer_caps(request: Request) -> tuple[float, float]:
     price_cap = DEFAULT_MAX_OFFER_PRICE_PER_HOUR
     lifetime_cap = DEFAULT_MAX_OFFER_LIFETIME_HOURS
     if hyper is not None:
-        price_cap = float(
-            getattr(hyper, "max_offer_price_per_hour", price_cap) or price_cap
-        )
+        price_cap = float(getattr(hyper, "max_offer_price_per_hour", price_cap) or price_cap)
         lifetime_cap = float(
             getattr(hyper, "max_offer_lifetime_hours", lifetime_cap) or lifetime_cap
         )
     return price_cap, lifetime_cap
+
+
+def _job_admit_kwargs(request: Request) -> dict[str, Any]:
+    """Resolve job admit caps/allowlist from HyperSettings."""
+
+    hyper = getattr(request.app.state, "hyper_settings", None)
+    allowlist_raw = None
+    max_world = 64
+    max_nnodes = 16
+    max_nproc = 8
+    max_timeout = 86_400
+    max_gpus = 128
+    if hyper is not None:
+        allowlist_raw = getattr(hyper, "job_image_allowlist", None)
+        max_world = int(getattr(hyper, "max_job_world_size", max_world) or max_world)
+        max_nnodes = int(getattr(hyper, "max_job_nnodes", max_nnodes) or max_nnodes)
+        max_nproc = int(getattr(hyper, "max_job_nproc_per_node", max_nproc) or max_nproc)
+        max_timeout = int(getattr(hyper, "max_job_timeout_s", max_timeout) or max_timeout)
+        max_gpus = int(getattr(hyper, "max_job_gpu_budget", max_gpus) or max_gpus)
+    return {
+        "image_allowlist": parse_image_allowlist(allowlist_raw),
+        "max_world_size": max_world,
+        "max_nnodes": max_nnodes,
+        "max_nproc_per_node": max_nproc,
+        "max_timeout_s": max_timeout,
+        "max_gpu_budget": max_gpus,
+    }
 
 
 @public_route(tags=["marketplace"])
@@ -533,11 +588,83 @@ async def pods_get(
 
 
 @public_route(tags=["jobs"])
-@router.get("/v1/jobs")
-async def list_jobs() -> dict[str, list[object]]:
-    """List submitter jobs (scaffold; domain logic lands in M3)."""
+@router.post("/v1/jobs", status_code=status.HTTP_200_OK)
+async def jobs_create(
+    body: JobAdmitRequest,
+    identity: RequireMiner,
+    session: DbSession,
+    request: Request,
+) -> dict[str, Any]:
+    """Admit HyperJob with static gates + idempotency (VAL-JOB-001..005)."""
 
-    return {"items": []}
+    caps = _job_admit_kwargs(request)
+    try:
+        job, created = await admit_job(
+            session,
+            hotkey=identity.hotkey,
+            image_digest=body.image_digest,
+            entrypoint=body.entrypoint,
+            world_size=body.world_size,
+            nnodes=body.nnodes,
+            nproc_per_node=body.nproc_per_node,
+            resource=body.resource,
+            timeout_s=body.timeout_s,
+            client_request_id=body.client_request_id,
+            backend=body.backend,
+            fabric=body.fabric,
+            tee=body.tee,
+            env=body.env,
+            placement_policy=body.placement_policy,
+            lease_id=body.lease_id,
+            pod_id=body.pod_id,
+            **caps,
+        )
+    except JobError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    payload = job_to_public(job)
+    payload["created"] = created
+    return payload
+
+
+@public_route(tags=["jobs"])
+@router.get("/v1/jobs")
+async def list_jobs(
+    session: DbSession,
+    request: Request,
+    status_filter: str | None = Query(default=None, alias="status"),
+) -> dict[str, Any]:
+    """List jobs scoped to submitter hotkey (VAL-JOB-001/012 list surface).
+
+    Without X-Hotkey returns empty items (fail-closed identity scope).
+    """
+
+    hotkey = _header_hotkey(request)
+    items = await list_jobs_for_hotkey(
+        session,
+        hotkey=hotkey,
+        status=status_filter,
+    )
+    return {"items": [job_to_public(j) for j in items]}
+
+
+@public_route(tags=["jobs"])
+@router.get("/v1/jobs/{job_id}")
+async def jobs_get(
+    job_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Job detail by id (admit-phase shape; lifecycle fields expand in M3)."""
+
+    job = await get_job(session, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "job_not_found", "message": "job not found"},
+        )
+    return job_to_public(job)
 
 
 @public_route(tags=["scoring"])
@@ -549,6 +676,8 @@ async def leaderboard() -> dict[str, list[object]]:
 
 
 __all__ = [
+    "jobs_create",
+    "jobs_get",
     "leaderboard",
     "leases_get",
     "leases_list",

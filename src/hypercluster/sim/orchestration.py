@@ -248,6 +248,27 @@ def run_cross_multinode_fabric_tee_bundle(
     )
 
 
+def run_cross_market_resilience_auth_bundle(
+    base_url: str,
+    *,
+    timeout: float = 45.0,
+    shared_token: str | None = None,
+    **kwargs: Any,
+) -> ScenarioResult:
+    """VAL-CROSS-010/011/024 double-rent recover, idle protect, nonce refuse."""
+
+    from hypercluster.sim.cross_market_resilience_auth import (
+        run_cross_market_resilience_auth,
+    )
+
+    _ = kwargs
+    return run_cross_market_resilience_auth(
+        base_url,
+        timeout=timeout,
+        shared_token=shared_token,
+    )
+
+
 __all__ = [
     "DEFAULT_SCENARIO_ORDER",
     "FABRIC_SCENARIOS",
@@ -255,6 +276,7 @@ __all__ = [
     "SuiteResult",
     "normalize_scenario_names",
     "run_cross_happy_path_bundle",
+    "run_cross_market_resilience_auth_bundle",
     "run_cross_multinode_fabric_tee_bundle",
     "run_fabric_bundle",
     "run_happy_path_bundle",

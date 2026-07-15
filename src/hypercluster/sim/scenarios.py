@@ -11,6 +11,10 @@ Cross-area happy path (marketplace→rent→job→score→weights) lives in
 :mod:`hypercluster.sim.cross_happy_path` and is invoked via
 :func:`run_cross_happy_path` / :func:`run_scenario` name ``cross-happy-path``.
 
+Market resilience (double-rent recover + idle protect + nonce refuse) lives in
+:mod:`hypercluster.sim.cross_market_resilience_auth` as
+``cross-market-resilience-auth`` (VAL-CROSS-010/011/024).
+
 See hypercluster.sim.orchestration for the reusable multi-scenario suite runner.
 """
 
@@ -35,11 +39,16 @@ TEE_OFFLINE = "tee-offline"
 WEIGHTS = "weights"
 CROSS_HAPPY_PATH = "cross-happy-path"
 CROSS_MULTINODE = "cross-multinode-fabric-tee"
+CROSS_MARKET_RESILIENCE = "cross-market-resilience-auth"
 
 # Architecture §12.3 names remain the five canonical suite scenarios.
 KNOWN_SCENARIOS = (SMOKE, MARKETPLACE, NCCL, TEE_OFFLINE, WEIGHTS)
 # Extended names accepted by run_scenario (cross e2e; not part of suite order).
-EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (CROSS_HAPPY_PATH, CROSS_MULTINODE)
+EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (
+    CROSS_HAPPY_PATH,
+    CROSS_MULTINODE,
+    CROSS_MARKET_RESILIENCE,
+)
 
 # Deterministic local-sim hotkeys (not real ss58; HMAC insecure mode).
 _SCENARIO_PROVIDER_HK = "sim-mkt-provider-hotkey-aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1351,6 +1360,21 @@ def run_scenario(
             include_fail_inject=False,
             include_tee_bonus=True,
         )
+    if key in {
+        CROSS_MARKET_RESILIENCE,
+        "cross_market_resilience_auth",
+        "cross-market-resilience",
+        "market-resilience-auth",
+    }:
+        from hypercluster.sim.cross_market_resilience_auth import (
+            run_cross_market_resilience_auth,
+        )
+
+        return run_cross_market_resilience_auth(
+            base_url,
+            timeout=max(timeout, 45.0),
+            shared_token=shared_token,
+        )
     return ScenarioResult(
         name=key,
         ok=False,
@@ -1365,6 +1389,7 @@ def run_scenario(
 
 __all__ = [
     "CROSS_HAPPY_PATH",
+    "CROSS_MARKET_RESILIENCE",
     "CROSS_MULTINODE",
     "EXTENDED_SCENARIOS",
     "KNOWN_SCENARIOS",

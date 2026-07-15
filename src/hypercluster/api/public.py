@@ -167,6 +167,18 @@ class JobCancelRequest(BaseModel):
     reason: str | None = Field(default="user_cancel", max_length=256)
 
 
+class IdleReclaimRequest(BaseModel):
+    """Sim-only idle reclaim tick (VAL-CROSS-011 / VAL-MKT-020).
+
+    Ages node heartbeats optionally, then runs the tenant short-circuit
+    reclaim path so free stale inventory can go offline without killing
+    active rentals.
+    """
+
+    liveness_seconds: int = Field(default=30, ge=1, le=86_400)
+    age_heartbeats_seconds: int | None = Field(default=None, ge=0, le=86_400_000)
+
+
 class JobResultsRequest(BaseModel):
     """Provider/worker result envelope (VAL-JOB-009 attempt-keyed).
 
@@ -1042,6 +1054,67 @@ async def weight_preview(
     return await weight_preview_payload(database=database, hyper=hyper)
 
 
+@public_route(tags=["sim"])
+@router.post("/v1/sim/idle-reclaim", status_code=status.HTTP_200_OK)
+async def sim_idle_reclaim(
+    session: DbSession,
+    body: IdleReclaimRequest | None = None,
+) -> dict[str, Any]:
+    """Run an idle-only reclaim tick under local sim (VAL-CROSS-011).
+
+    Optionally ages every node heartbeat into the past so the sweep becomes
+    deterministic without wall-clock waits. Active leases remain protected:
+    ``run_idle_reclaim_sweep`` never offline-kills rented tenant capacity.
+    """
+
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from hypercluster.db.models import Lease, Node, utc_now
+    from hypercluster.domain.leases import (
+        ACTIVE_LEASE_STATUSES,
+        get_pod_by_lease,
+        run_idle_reclaim_sweep,
+    )
+
+    req = body if body is not None else IdleReclaimRequest()
+    now = utc_now()
+    aged = 0
+    if req.age_heartbeats_seconds is not None and req.age_heartbeats_seconds > 0:
+        delta = timedelta(seconds=int(req.age_heartbeats_seconds))
+        result = await session.execute(select(Node))
+        for node in result.scalars().all():
+            node.last_heartbeat = now - delta
+            node.updated_at = now
+            aged += 1
+        if aged:
+            await session.commit()
+
+    # Snapshot protected nodes (active leases) before sweep for evidence.
+    lease_rows = await session.execute(
+        select(Lease).where(Lease.status.in_(tuple(ACTIVE_LEASE_STATUSES)))
+    )
+    protected: list[str] = []
+    for lease in lease_rows.scalars().all():
+        pod = await get_pod_by_lease(session, lease.id)
+        if pod is not None:
+            protected.extend(pod.node_ids())
+
+    offline_marked = await run_idle_reclaim_sweep(
+        session,
+        liveness_seconds=int(req.liveness_seconds),
+    )
+    return {
+        "ok": True,
+        "age_heartbeats_seconds": req.age_heartbeats_seconds,
+        "liveness_seconds": req.liveness_seconds,
+        "nodes_aged": aged,
+        "offline_marked": offline_marked,
+        "protected_node_ids": sorted(set(protected)),
+    }
+
+
 __all__ = [
     "jobs_attempt_get",
     "jobs_cancel",
@@ -1073,4 +1146,5 @@ __all__ = [
     "providers_me",
     "providers_register",
     "router",
+    "sim_idle_reclaim",
 ]

@@ -7,6 +7,12 @@ from hypercluster.sim.cross_happy_path import (
     capture_httpx_egress,
     run_cross_happy_path,
 )
+from hypercluster.sim.cross_market_resilience_auth import (
+    run_cross_double_rent_recover,
+    run_cross_idle_rental_protection,
+    run_cross_market_resilience_auth,
+    run_cross_nonce_replay_refuse,
+)
 from hypercluster.sim.cross_multinode_fabric_tee import (
     run_cross_multinode_fabric_fail,
     run_cross_multinode_fabric_tee,
@@ -27,6 +33,7 @@ from hypercluster.sim.orchestration import (
     DEFAULT_SCENARIO_ORDER,
     SuiteResult,
     run_cross_happy_path_bundle,
+    run_cross_market_resilience_auth_bundle,
     run_cross_multinode_fabric_tee_bundle,
     run_named_scenarios,
     run_scenario_suite,
@@ -40,6 +47,7 @@ from hypercluster.sim.ports import (
 )
 from hypercluster.sim.scenarios import (
     CROSS_HAPPY_PATH,
+    CROSS_MARKET_RESILIENCE,
     CROSS_MULTINODE,
     KNOWN_SCENARIOS,
     ScenarioResult,
@@ -59,6 +67,7 @@ from hypercluster.sim.seed import (
 
 __all__ = [
     "CROSS_HAPPY_PATH",
+    "CROSS_MARKET_RESILIENCE",
     "CROSS_MULTINODE",
     "DEFAULT_BAREMETAL_PORT",
     "DEFAULT_SCENARIO_ORDER",
@@ -85,12 +94,17 @@ __all__ = [
     "plan_readiness",
     "probe_identity_gates",
     "resolve_sim_seed",
+    "run_cross_double_rent_recover",
     "run_cross_happy_path",
     "run_cross_happy_path_bundle",
+    "run_cross_idle_rental_protection",
+    "run_cross_market_resilience_auth",
+    "run_cross_market_resilience_auth_bundle",
     "run_cross_multinode_fabric_fail",
     "run_cross_multinode_fabric_tee",
     "run_cross_multinode_fabric_tee_bundle",
     "run_cross_multinode_success",
+    "run_cross_nonce_replay_refuse",
     "run_cross_tee_offline_bonus",
     "run_doctor",
     "run_marketplace_scenario",

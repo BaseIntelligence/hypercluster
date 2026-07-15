@@ -16,6 +16,12 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from hypercluster.api.auth import DbSession, RequireMiner
+from hypercluster.domain.fabric_reports import (
+    FabricReportError,
+    fabric_scan_node,
+    get_latest_fabric_report,
+    report_to_public,
+)
 from hypercluster.domain.job_lifecycle import (
     attempt_to_public,
     cancel_job,
@@ -99,6 +105,14 @@ class NodeRegisterRequest(BaseModel):
 
 class NodeHeartbeatRequest(BaseModel):
     node_id: str | None = Field(default=None, max_length=36)
+
+
+class FabricScanRequest(BaseModel):
+    """Fabric-scan body (VAL-FAB-018). Sim source is the CI default."""
+
+    source: str = Field(default="sim", max_length=32)
+    seed: int = Field(default=0, ge=0)
+    topo_variant: str = Field(default="pack", max_length=32)
 
 
 class OfferCreateRequest(BaseModel):
@@ -375,6 +389,81 @@ async def nodes_get(
             detail={"code": "node_not_found", "message": "node not found"},
         )
     return node_to_public(node)
+
+
+@public_route(tags=["fabric"])
+@router.post("/v1/nodes/{node_id}/fabric-scan", status_code=status.HTTP_200_OK)
+async def nodes_fabric_scan(
+    node_id: str,
+    body: FabricScanRequest,
+    identity: RequireMiner,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Produce and accept a FabricReport for a registered node (VAL-FAB-018).
+
+    Signing identity must own the node (or node must be public/sim in ownership); ownership
+    is enforced against marketplace provider linkage.
+    """
+
+    node = await get_node(session, node_id)
+    if node is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "node_not_found", "message": "node not found"},
+        )
+    provider = await get_provider_by_hotkey(session, identity.hotkey)
+    if provider is None or provider.id != node.provider_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "node_not_owned", "message": "node belongs to another provider"},
+        )
+
+    source = (body.source or "sim").strip().lower()
+    if source not in {"sim", "scan", "inject", "manual"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_source", "message": "source must be sim|scan|inject|manual"},
+        )
+    try:
+        report = await fabric_scan_node(
+            session,
+            node_id=node_id,
+            source=source,  # type: ignore[arg-type]
+            seed=int(body.seed),
+            topo_variant=body.topo_variant or "pack",
+        )
+    except FabricReportError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return report_to_public(report)
+
+
+@public_route(tags=["fabric"])
+@router.get("/v1/nodes/{node_id}/fabric-report")
+async def nodes_fabric_report(
+    node_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Return latest accepted fabric report for a node (VAL-FAB-001/018)."""
+
+    node = await get_node(session, node_id)
+    if node is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "node_not_found", "message": "node not found"},
+        )
+    row = await get_latest_fabric_report(session, node_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "fabric_report_not_found",
+                "message": "no fabric report for node; run fabric-scan first",
+            },
+        )
+    return report_to_public(row)
 
 
 @public_route(tags=["marketplace"])
@@ -833,6 +922,8 @@ __all__ = [
     "leases_list",
     "leases_terminate",
     "list_jobs",
+    "nodes_fabric_report",
+    "nodes_fabric_scan",
     "nodes_get",
     "nodes_heartbeat",
     "nodes_list",

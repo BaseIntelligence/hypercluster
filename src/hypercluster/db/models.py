@@ -718,6 +718,72 @@ class JobFabricReport(Base):
         }
 
 
+class FabricReportRow(Base):
+    """Per-node fabric self-report (architecture §3.1 fabric_reports).
+
+    Distinct from JobFabricReport (per-job collected digests). This table is
+    the durable inventory scan store used by fabric-scan (VAL-FAB-001/018).
+    """
+
+    __tablename__ = "fabric_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    node_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("nodes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    ib_devices_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    ib_rate_gbps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gpu_topo_sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    numa_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    nccl_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    report_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        try:
+            ib_devices = json.loads(self.ib_devices_json)
+        except (TypeError, ValueError):
+            ib_devices = []
+        numa_map: Any = None
+        if self.numa_map_json:
+            try:
+                numa_map = json.loads(self.numa_map_json)
+            except (TypeError, ValueError):
+                numa_map = self.numa_map_json
+        raw: Any = {}
+        if self.raw_json:
+            try:
+                raw = json.loads(self.raw_json)
+            except (TypeError, ValueError):
+                raw = {}
+        return {
+            "id": self.id,
+            "node_id": self.node_id,
+            "collected_at": isoformat_utc(self.collected_at),
+            "ib_devices": ib_devices if isinstance(ib_devices, list) else [],
+            "ib_rate_gbps": self.ib_rate_gbps,
+            "gpu_topo_sha256": self.gpu_topo_sha256,
+            "numa_map": numa_map,
+            "nccl_version": self.nccl_version,
+            "report_digest": self.report_digest,
+            "raw": raw if isinstance(raw, dict) else {},
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
 class RequestNonce(Base):
     """Replay protection for signed miner requests."""
 
@@ -737,6 +803,7 @@ class RequestNonce(Base):
 
 
 __all__ = [
+    "FabricReportRow",
     "Job",
     "JobAttempt",
     "JobFabricReport",

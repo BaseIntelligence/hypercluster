@@ -8,6 +8,7 @@ Architecture outline (expanded in later milestones):
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import httpx
@@ -33,7 +34,13 @@ sim_app = typer.Typer(
     no_args_is_help=True,
     help="Local simulator harness (doctor, scenarios).",
 )
+nodes_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Provider node register / heartbeat / fabric-scan.",
+)
 app.add_typer(sim_app, name="sim")
+app.add_typer(nodes_app, name="nodes")
 
 
 def default_base_url() -> str:
@@ -215,10 +222,120 @@ def sim_run_scenario_cmd(
 
 
 @sim_app.command("seed")
-def sim_seed_cmd() -> None:
-    """Placeholder seed command (deterministic fixtures land later milestones)."""
+def sim_seed_cmd(
+    node_count: int = typer.Option(4, "--node-count", help="Virtual node count"),
+    gpus_per_node: int = typer.Option(2, "--gpus-per-node", help="GPUs per sim node"),
+    seed: int = typer.Option(0, "--seed", help="Deterministic inventory seed"),
+) -> None:
+    """Seed synthetic IB/NVLink multi-node inventory (VAL-FAB-019)."""
 
-    typer.echo("sim seed: stub ok (no-op in M1 scaffold)")
+    from hypercluster.sim.inventory import plan_readiness, seed_sim_inventory
+
+    inventory = seed_sim_inventory(
+        seed=seed,
+        node_count=node_count,
+        gpus_per_node=gpus_per_node,
+    )
+    readiness = plan_readiness(
+        inventory,
+        world_size=min(node_count * gpus_per_node, max(2, gpus_per_node * 2)),
+        nnodes=min(node_count, 2),
+        nproc_per_node=gpus_per_node,
+    )
+    summary = {
+        "nodes": len(inventory.nodes),
+        "ib_edges": len(inventory.ib_edges),
+        "nvlink_edges": len(inventory.nvlink_edges),
+        "graph_digest": inventory.graph_digest,
+        "seed": seed,
+        "plan_ready": readiness.ok,
+        "plan_nnodes_used": readiness.nnodes_used,
+        "report_digests": [n.fabric_report.report_digest for n in inventory.nodes],
+    }
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+    typer.echo(
+        f"sim seed: nodes={len(inventory.nodes)} graph_digest={inventory.graph_digest} "
+        f"plan_ready={readiness.ok}"
+    )
+    raise typer.Exit(code=0 if readiness.ok else 1)
+
+
+@nodes_app.command("fabric-scan")
+def nodes_fabric_scan_cmd(
+    node_id: str = typer.Option(..., "--node-id", help="Registered node id"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    seed: int = typer.Option(0, "--seed", help="Sim scan seed"),
+    source: str = typer.Option("sim", "--source", help="sim|scan|inject|manual"),
+    hotkey: str | None = typer.Option(
+        None,
+        "--hotkey",
+        help="Provider hotkey (or HYPER_HOTKEY / CHALLENGE_HOTKEY env)",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Challenge shared token (or CHALLENGE_SHARED_TOKEN env)",
+    ),
+) -> None:
+    """Run fabric-scan for a node and print the accepted FabricReport (VAL-FAB-018)."""
+
+    from hypercluster.api.auth import build_signed_headers
+
+    base = _resolve_base_url(url, host, port)
+    resolved_hotkey = (
+        hotkey
+        or os.environ.get("HYPER_HOTKEY")
+        or os.environ.get("CHALLENGE_HOTKEY")
+        or "sim-fab-cli-hotkey"
+    )
+    resolved_token = (
+        token
+        or os.environ.get("CHALLENGE_SHARED_TOKEN")
+        or os.environ.get("HYPER_SHARED_TOKEN")
+        or ""
+    )
+    if not resolved_token:
+        typer.echo(
+            "fabric-scan requires --token or CHALLENGE_SHARED_TOKEN for signed request",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    body = {"source": source, "seed": seed}
+    raw = json.dumps(body).encode()
+    headers = build_signed_headers(
+        secret=resolved_token,
+        hotkey=resolved_hotkey,
+        body=raw,
+    )
+    headers["Content-Type"] = "application/json"
+    try:
+        response = httpx.post(
+            f"{base}/v1/nodes/{node_id}/fabric-scan",
+            content=raw,
+            headers=headers,
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"fabric-scan failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"{response.status_code} {response.text}")
+    if response.status_code == 404:
+        raise typer.Exit(code=1)
+    if response.status_code >= 400:
+        raise typer.Exit(code=1)
+    try:
+        payload = response.json()
+    except ValueError:
+        raise typer.Exit(code=1) from None
+    digest = payload.get("report_digest")
+    if not digest:
+        typer.echo("fabric-scan response missing report_digest", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"accepted report_digest={digest} node_id={payload.get('node_id')}")
     raise typer.Exit(code=0)
 
 

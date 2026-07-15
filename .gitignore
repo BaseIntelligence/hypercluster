@@ -20,3 +20,5 @@ dist/
 # Staged only for local docker builds (copied from platform/dist); never commit.
 docker/vendor/*.whl
 !docker/vendor/.gitkeep
+# Local documentation evidence (never publish)
+.docs-evidence/

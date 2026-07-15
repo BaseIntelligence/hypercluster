@@ -402,6 +402,32 @@ async def test_lease_list_renter_and_provider_views(market_client: AsyncClient) 
     assert "status" in body
 
 
+@pytest.mark.asyncio
+async def test_lease_list_without_hotkey_returns_empty(market_client: AsyncClient) -> None:
+    """VAL-MKT-016 fail-closed: GET /v1/leases without X-Hotkey yields empty items.
+
+    Identity-scoped list must never dump the full lease table when the caller
+    provides no X-Hotkey. Prefer 200 + items=[] over unscoped dump.
+    """
+
+    _p, _n, offer = await _ready_listed_single(market_client)
+    rent = await _rent_offer(market_client, offer["id"], hotkey=RENTER_HK)
+    assert rent["status"] == 200, rent
+    lease_id = rent["json"]["lease"]["id"]
+
+    # Sanity: scoped renter view still sees the lease.
+    scoped = await market_client.get("/v1/leases", headers={"X-Hotkey": RENTER_HK})
+    assert scoped.status_code == 200
+    assert any(x["id"] == lease_id for x in scoped.json()["items"])
+
+    # Fail-closed: missing identity must not enumerate all rentals.
+    unscoped = await market_client.get("/v1/leases")
+    assert unscoped.status_code == 200, unscoped.text
+    body = unscoped.json()
+    assert "items" in body
+    assert body["items"] == [], body
+
+
 # ----- VAL-MKT-019 cluster multi-node binding -------------------------------
 
 

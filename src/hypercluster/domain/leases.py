@@ -291,30 +291,37 @@ async def list_leases(
 ) -> list[Lease]:
     """List leases scoped to renter hotkey and/or provider hotkey (VAL-MKT-016).
 
+    Fail-closed: when ``hotkey`` is missing / empty, return ``[]`` rather than
+    the full lease table. Callers must supply identity for renter or provider
+    views — there is no unauthenticated admin dump.
+
     When ``hotkey`` is set, return leases where the caller is the renter **or**
     the provider owner of the offer (via provider_id ↔ providers.hotkey).
     """
+
+    # Identity-scoped list: missing hotkey must never dump all rentals.
+    if not hotkey:
+        return []
 
     stmt = select(Lease).order_by(Lease.created_at.asc())
     if offer_id:
         stmt = stmt.where(Lease.offer_id == offer_id)
     if status:
         stmt = stmt.where(Lease.status == status)
-    if hotkey:
-        # Join through providers for provider-view; also match renter_hotkey.
-        provider_result = await session.execute(
-            select(Provider.id).where(Provider.hotkey == hotkey)
-        )
-        provider_ids = [row[0] for row in provider_result.all()]
-        if provider_ids:
-            stmt = stmt.where(
-                or_(
-                    Lease.renter_hotkey == hotkey,
-                    Lease.provider_id.in_(provider_ids),
-                )
+    # Join through providers for provider-view; also match renter_hotkey.
+    provider_result = await session.execute(
+        select(Provider.id).where(Provider.hotkey == hotkey)
+    )
+    provider_ids = [row[0] for row in provider_result.all()]
+    if provider_ids:
+        stmt = stmt.where(
+            or_(
+                Lease.renter_hotkey == hotkey,
+                Lease.provider_id.in_(provider_ids),
             )
-        else:
-            stmt = stmt.where(Lease.renter_hotkey == hotkey)
+        )
+    else:
+        stmt = stmt.where(Lease.renter_hotkey == hotkey)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 

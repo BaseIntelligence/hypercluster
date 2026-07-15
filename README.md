@@ -20,9 +20,9 @@
 
 ## Overview
 
-Hypercluster is a [Base Intelligence](https://github.com/BaseIntelligence/base) challenge service. Miners can **supply** GPU/CPU capacity (register nodes, list offers, host pods) and **demand** Modal-like multi-node jobs (browse offers, rent, submit work). The challenge owns marketplace lifecycle, topology-aware InfiniBand/NCCL planning (local simulator in default CI), optional dstack TEE offline verification, and a four-factor scoring engine that emits **raw hotkey weights** to Base master.
+Hypercluster is a [Base Intelligence](https://github.com/BaseIntelligence/base) challenge service. Miners can **supply** GPU/CPU capacity (register nodes, list offers, host pods) and **demand** Modal-like multi-node jobs (browse offers, rent, submit work). The challenge owns marketplace lifecycle, topology-aware InfiniBand/NCCL planning (local simulator in default CI), optional dstack TEE offline verification, optional **non-TEE SSH GPU host probe** (FakeSsh in default CI), and a four-factor scoring engine that emits **raw hotkey weights** to Base master.
 
-Hypercluster scores marketplace honesty and execution quality. It is **not** a commercial cloud broker and **does not ship** a Verda (or other cloud) product adapter. You do **not** need a commercial GPU broker account to mine. Self-owned SSH fleets and inventory registered through the home-grown APIs are the product path. Multi-node fabric validation defaults to a deterministic local simulator; live single-GPU ops checks are optional maintainer tooling outside the product package tree.
+Hypercluster scores marketplace honesty and execution quality. It is **not** a commercial cloud broker and **does not ship** a Verda (or other cloud) product adapter. You do **not** need a commercial GPU broker account to mine. Self-owned SSH fleets and inventory registered through the home-grown APIs are the product path. Multi-node fabric validation defaults to a deterministic local simulator; GPU probe gates use FakeSsh offline; live single-GPU rent + RealSSH probe are optional maintainer tooling under `scripts/qa/` outside the product package tree. Challenge never calls `set_weights`; formula stays `correctness × efficiency × fabric_gate × tee_bonus`.
 
 Trust model: **cryptographically-anchored trust-but-audit**. Signed miner/provider writes, digest-pinned jobs, fabric gates, optional TEE multipliers, integrity zeros on spoof paths. Multi-node InfiniBand is not an encrypted confidentiality fabric under GPU CC/TDX; TEE bolsters collocated honest compute, not wire secrecy across ranks.
 
@@ -36,10 +36,12 @@ flowchart LR
   API --> JOB[Jobs and queue]
   API --> FAB[Fabric and NCCL]
   API --> TEE[TEE offline verify]
+  API --> PROBE[GPU host probe]
   MKT --> DB[(SQLite /data)]
   JOB --> DB
   FAB --> DB
   TEE --> DB
+  PROBE --> DB
   API --> SCR[Scoring]
   SCR --> W[Raw weight push]
   W --> MAS[Base master]
@@ -78,9 +80,10 @@ Same hotkey may act as demand and supply; self-deal soft penalties apply in scor
 | Operators | [Jobs](docs/jobs.md) | Lifecycle, queue, results |
 | Operators | [Fabric sim](docs/fabric.md) | Topology, NCCL, honesty layers |
 | Operators | [TEE offline](docs/tee.md) | Fixtures, compose-hash, TEE bonus |
+| Operators | [GPU probe](docs/gpu-probe.md) | Non-TEE SSH checks, FakeSsh CI, evidence APIs |
 | Operators | [Scoring](docs/scoring.md) | Four-factor formula, weights |
 | Operators | [CLI](docs/cli.md) | Full Typer surface |
-| Maintainers | [Live QA protocol](docs/live-qa.md) | External single-GPU ops only |
+| Maintainers | [Live QA protocol](docs/live-qa.md) | External single-GPU ops + optional host probe |
 | Everyone | [Security](docs/security.md) | Secrets, residual risks, isolation |
 
 ## Run locally

@@ -21,8 +21,9 @@ Incomplete or invalid signatures are rejected. CLI helpers must not print tokens
 | Challenge shared token | env `CHALLENGE_SHARED_TOKEN` or `CHALLENGE_SHARED_TOKEN_FILE` | Prefer file mount; never commit real values |
 | SQLite URL | `CHALLENGE_DATABASE_URL` under `/data` | Never `BASE_DATABASE_URL` |
 | Product knobs | `HYPER_*` | Separate from Base `CHALLENGE_*` prefix |
-| Provider SSH material | Operator-managed outside public payloads | Do not store plaintext secrets in git |
-| Commercial cloud QA secrets | Outside product process and outside default pytest | Never required for miners |
+| Provider SSH material | Operator-managed outside public payloads | Do not store plaintext secrets in git; GPU probe persists **fingerprint / key_ref only** (never PEM in SQLite or evidence JSON) |
+| GPU probe FakeSsh | Tests / explicit allow only | Production must not silently fake silicon (`HYPER_SSH_TRANSPORT=real` default path fails closed without keys) |
+| Commercial cloud QA secrets | Outside product process and outside default pytest | Never required for miners; never product Verda adapter |
 
 Product documentation and `.env.example` use placeholders only.
 
@@ -35,7 +36,7 @@ Product documentation and `.env.example` use placeholders only.
 
 ## Integrity and scoring
 
-Integrity failures force **composite = 0** for an attempt, including (non-exhaustive): attestation fail, image/compose mutation, rank desync, inventory spoof, fabric lie, forbidden eth fallback when IB was required.
+Integrity failures force **composite = 0** for an attempt, including (non-exhaustive): attestation fail, image/compose mutation, rank desync, inventory spoof, fabric lie, forbidden eth fallback when IB was required, GPU probe fatal fail / claim-vs-evidence mismatch under policy. Scoring formula stays four factors only (never `set_weights` from the challenge).
 
 Self-deal and spam soft penalties can damp aggregated hotkey mass without inventing negative weights.
 
@@ -46,14 +47,27 @@ Self-deal and spam soft penalties can damp aggregated hotkey mass without invent
 - **Multi-node InfiniBand / RDMA is not encrypted by NVIDIA CC or TDX alone.** Do not market "encrypted fabric" from TEE tier alone. TEE strengthens collocated measurement when quotes bind the intended report_data layout.
 - Sim-tier proofs must not mint live TEE bonuses.
 
+## GPU probe security (non-TEE)
+
+| Rule | Detail |
+| --- | --- |
+| Allowlist SSH only | `command_id` maps to fixed argv templates; reject unknown ids; no free-form remote shell from API bodies |
+| No PEM storage | SQLite and public evidence expose at most key fingerprint / ref kind+name |
+| Redaction | Evidence stores redacted short raw; secrets scrubbed from messages |
+| FakeSsh boundary | Default gated CI uses FakeSsh fixtures; production refuses silent fake |
+| Live cloud ops | External `scripts/qa/*` only; product package remains free of Verda SDK/OAuth |
+
+See [GPU probe](gpu-probe.md) for the ordered fatal/advisory table.
+
 ## Residual risks (honest)
 
 | Risk | Residual |
 | --- | --- |
-| Sophisticated multi-node host gaming without TEE | Mitigated by fabric gates, digests, optional TEE bonus, sample / honesty injects; not eliminated |
+| Sophisticated multi-node host gaming without TEE | Mitigated by fabric gates, digests, optional TEE bonus, GPU probe inventory/UUID uniqueness, sample / honesty injects; not eliminated |
 | Shared SQLite single-writer VI | Horizontal multi-replica challenge ownership deferred |
 | Operator misconfig of master URL or tokens | Fail closed auth/push; never log secrets |
 | Live cloud QA cost | Operator-enforced caps; always discontinue; not part of default CI |
+| Open (non-sealed) microbench strength | Trades closed Lium `.so` hardness for reproducible open code; future AEAD challenge optional |
 
 ## Security checklist for operators
 

@@ -19,7 +19,7 @@ Shared flags typically include `--base-url` / `--url`, hotkey, and auth material
 | `health` | Probe live `/health`; exit 0 only when `status=ok` |
 | `db init` / `db migrate` | Ensure SQLite schema under `CHALLENGE_DATABASE_URL` |
 | `marketplace …` | Offers, rent, leases |
-| `nodes …` | Register, heartbeat, fabric-scan |
+| `nodes …` | Register, heartbeat, fabric-scan, GPU probe + evidence |
 | `jobs …` | Submit, status, list, cancel, logs |
 | `fabric …` | Plan dry-run, gated launch, report show |
 | `attest …` | Offline verify, compose-hash |
@@ -43,7 +43,13 @@ hypercluster marketplace terminate --lease-id ...
 hypercluster nodes register ...
 hypercluster nodes heartbeat ...
 hypercluster nodes fabric-scan --node-id ...
+hypercluster nodes probe-gpu NODE_ID [--mode full|quick] [--json]
+hypercluster nodes probe-gpu-sim NODE_ID --pass-all|--fail CHECK_ID [--json]
+hypercluster nodes evidence list|latest NODE_ID [--json]
+hypercluster nodes evidence show EVIDENCE_ID [--json]
 ```
+
+GPU probe CLI wraps the same product APIs. Default CI exercises **FakeSsh** fixtures; live RealSSH needs operator key paths (never PEM on the CLI argv for persistence). Exit codes for probe-gpu: **0** pass, **2** failed checks, **3** transport/error. See [GPU probe](gpu-probe.md).
 
 ## Jobs
 

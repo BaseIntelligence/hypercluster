@@ -17,7 +17,9 @@ composite = correctness × efficiency × fabric_gate × tee_bonus
 
 ### Integrity zero
 
-Any integrity failure forces `composite = 0` for that attempt, including attestation fail, image mutation, rank desync, inventory spoof, and fabric lie.
+Any integrity failure forces `composite = 0` for that attempt, including attestation fail, image mutation, rank desync, inventory spoof, fabric lie, and **GPU probe honesty fails** (failed/error evidence under live-evidence policy, or claim-vs-measured mismatch vs last good `GpuHostEvidence`).
+
+GPU probe **does not add a fifth formula factor**. Defaults leave the unprobed sim path green; operators may inject zeros with `HYPER_SIM_GPU_PROBE_FAIL` for CI drills. See [GPU probe](gpu-probe.md).
 
 ## Aggregation → raw weights
 

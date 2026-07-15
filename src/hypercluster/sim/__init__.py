@@ -12,6 +12,12 @@ from hypercluster.sim.inventory import (
     plan_readiness,
     seed_sim_inventory,
 )
+from hypercluster.sim.orchestration import (
+    DEFAULT_SCENARIO_ORDER,
+    SuiteResult,
+    run_named_scenarios,
+    run_scenario_suite,
+)
 from hypercluster.sim.ports import (
     DEFAULT_BAREMETAL_PORT,
     MAX_MISSION_PORT,
@@ -19,7 +25,16 @@ from hypercluster.sim.ports import (
     assert_mission_port,
     mission_port_band,
 )
-from hypercluster.sim.scenarios import ScenarioResult, run_scenario, run_smoke_scenario
+from hypercluster.sim.scenarios import (
+    KNOWN_SCENARIOS,
+    ScenarioResult,
+    run_marketplace_scenario,
+    run_nccl_scenario,
+    run_scenario,
+    run_smoke_scenario,
+    run_tee_offline_scenario,
+    run_weights_scenario,
+)
 from hypercluster.sim.seed import (
     DEFAULT_SIM_SEED,
     SIM_SEED_ENV,
@@ -29,7 +44,9 @@ from hypercluster.sim.seed import (
 
 __all__ = [
     "DEFAULT_BAREMETAL_PORT",
+    "DEFAULT_SCENARIO_ORDER",
     "DEFAULT_SIM_SEED",
+    "KNOWN_SCENARIOS",
     "BackendChecks",
     "DoctorReport",
     "IdentityReport",
@@ -40,6 +57,7 @@ __all__ = [
     "ScenarioResult",
     "SimInventory",
     "SimNode",
+    "SuiteResult",
     "assert_mission_port",
     "check_sim_backends",
     "default_sim_inventory",
@@ -49,7 +67,13 @@ __all__ = [
     "probe_identity_gates",
     "resolve_sim_seed",
     "run_doctor",
+    "run_marketplace_scenario",
+    "run_named_scenarios",
+    "run_nccl_scenario",
     "run_scenario",
+    "run_scenario_suite",
     "run_smoke_scenario",
+    "run_tee_offline_scenario",
+    "run_weights_scenario",
     "seed_sim_inventory",
 ]

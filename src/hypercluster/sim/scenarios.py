@@ -1,8 +1,13 @@
-"""Local CI scenario runners (smoke, marketplace, tee-offline).
+"""Local CI scenario runners (smoke, marketplace, nccl, tee-offline, weights).
 
 Architecture §12.3 names: smoke, marketplace, nccl, tee-offline, weights.
-M2: smoke (identity) + marketplace (offer/rent/terminate/double-rent).
-M5: tee-offline (offline fixtures only; no TEE silicon / live network).
+  - smoke: health/ready green + empty weights burn-safe (VAL-CLI-015)
+  - marketplace: offer/rent/terminate + double-rent reject (VAL-CLI-016)
+  - nccl: multi-node pack/spread + fabric_gate fail inject (VAL-CLI-017)
+  - tee-offline: positive/negative fixtures + bonus (VAL-CLI-018)
+  - weights: multi-hotkey composites → push ack/idempotency (VAL-CLI-019)
+
+See hypercluster.sim.orchestration for the reusable multi-scenario suite runner.
 """
 
 from __future__ import annotations
@@ -112,12 +117,73 @@ def run_smoke_scenario(
             identity=report,
         )
     steps.append("identity gates green")
-    steps.append("weights empty burn-safe stub (M1 scaffold: ok)")
+
+    # Empty / burn-safe weights preview (architecture §12.3 smoke).
+    steps.append("weights empty burn-safe probe")
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            preview = client.get(f"{report.base_url}/v1/weight-preview")
+            if preview.status_code == 404:
+                # Alternate public path sometimes exposed as /v1/weights.
+                alt = client.get(f"{report.base_url}/v1/weights")
+                if alt.status_code == 200:
+                    preview = alt
+            if preview.status_code == 200:
+                body = preview.json()
+                wmap = body.get("weights") if isinstance(body, dict) else None
+                if wmap is None and isinstance(body, dict):
+                    # shape may nest under data
+                    wmap = body.get("data") if isinstance(body.get("data"), dict) else body
+                    if isinstance(wmap, dict) and "weights" in wmap:
+                        wmap = wmap.get("weights")
+                if not isinstance(wmap, dict):
+                    wmap = {}
+                for key, val in wmap.items():
+                    try:
+                        fval = float(val)
+                    except (TypeError, ValueError):
+                        return ScenarioResult(
+                            name=SMOKE,
+                            ok=False,
+                            base_url=report.base_url,
+                            message=f"smoke failed: non-numeric weight {key}={val!r}",
+                            steps=steps,
+                            identity=report,
+                        )
+                    if fval != fval or fval == float("inf") or fval == float("-inf") or fval < 0:
+                        return ScenarioResult(
+                            name=SMOKE,
+                            ok=False,
+                            base_url=report.base_url,
+                            message=f"smoke failed: illegal weight {key}={val}",
+                            steps=steps,
+                            identity=report,
+                        )
+                steps.append(
+                    f"weights burn-safe ok (count={len(wmap)}; empty-or-finite≥0)"
+                )
+            else:
+                # Missing preview endpoint is acceptable on empty install when
+                # identity is green; burn-safe means no crash / no NaN invent.
+                steps.append(
+                    f"weight-preview HTTP {preview.status_code}; "
+                    "identity green — treating as empty burn-safe"
+                )
+    except httpx.HTTPError as exc:
+        return ScenarioResult(
+            name=SMOKE,
+            ok=False,
+            base_url=report.base_url,
+            message=f"smoke failed: weight-preview probe error: {exc}",
+            steps=steps,
+            identity=report,
+        )
+
     return ScenarioResult(
         name=SMOKE,
         ok=True,
         base_url=report.base_url,
-        message="smoke passed: health/ready green",
+        message="smoke passed: health/ready green + weights burn-safe",
         steps=steps,
         identity=report,
     )
@@ -710,6 +776,264 @@ def run_tee_offline_scenario(
     )
 
 
+
+def run_nccl_scenario(
+    base_url: str = "http://127.0.0.1:3200",
+    *,
+    seed: int = 7,
+) -> ScenarioResult:
+    """NCCL multi-node local sim: pack/spread plans + fabric_gate fail inject.
+
+    Fully offline — uses seed_sim_inventory + place_ranks + sim_launch only.
+    Never requires real InfiniBand or GPU silicon (VAL-CLI-017).
+    ``base_url`` is accepted for CLI parity; identity is not required.
+    """
+
+    from hypercluster.fabric.launcher import LaunchRequest, sim_launch
+    from hypercluster.fabric.planner import PlacementRequest, place_ranks
+    from hypercluster.sim.inventory import seed_sim_inventory
+
+    normalized = base_url.rstrip("/")
+    steps: list[str] = []
+    steps.append("nccl: seed multi-node IB/NVLink inventory (local sim only)")
+
+    inv = seed_sim_inventory(seed=seed, node_count=4, gpus_per_node=2)
+    reports = inv.reports()
+    if len(reports) < 2:
+        return _fail(
+            NCCL,
+            normalized,
+            f"expected ≥2 sim nodes, got {len(reports)}",
+            steps,
+            None,
+        )
+    steps.append(
+        f"inventory seed={seed} nodes={len(reports)} "
+        f"graph_digest={inv.graph_digest[:18]}…"
+    )
+
+    image = (
+        "sha256:sim000000000000000000000000000000000000000000000000000000000001"
+    )
+
+    # --- Pack plan (concentrate ranks) ---
+    steps.append("place_ranks policy=pack world_size=4 nnodes=2")
+    pack = place_ranks(
+        PlacementRequest(
+            job_id="sim-nccl-pack",
+            world_size=4,
+            nnodes=2,
+            nproc_per_node=2,
+            policy="pack",
+            fabric="auto",
+            node_reports=reports,
+        )
+    )
+    if not pack.ok:
+        return _fail(
+            NCCL,
+            normalized,
+            f"pack placement failed: {pack.reason or pack}",
+            steps,
+            None,
+        )
+    pack_nodes = {b.node_id for b in pack.rankmap}
+    steps.append(
+        f"pack ok ranks={len(pack.rankmap)} nodes={sorted(pack_nodes)} "
+        f"graph={pack.graph_digest[:18]}…"
+    )
+
+    # --- Spread plan (distribute ranks) ---
+    steps.append("place_ranks policy=spread world_size=4 nnodes=4")
+    spread = place_ranks(
+        PlacementRequest(
+            job_id="sim-nccl-spread",
+            world_size=4,
+            nnodes=4,
+            nproc_per_node=1,
+            policy="spread",
+            fabric="auto",
+            node_reports=reports,
+        )
+    )
+    if not spread.ok:
+        return _fail(
+            NCCL,
+            normalized,
+            f"spread placement failed: {spread.reason or spread}",
+            steps,
+            None,
+        )
+    spread_nodes = {b.node_id for b in spread.rankmap}
+    if len(spread_nodes) < 2:
+        return _fail(
+            NCCL,
+            normalized,
+            f"spread expected multi-node distribution, got nodes={spread_nodes}",
+            steps,
+            None,
+        )
+    steps.append(
+        f"spread ok ranks={len(spread.rankmap)} nodes={sorted(spread_nodes)} "
+        f"graph={spread.graph_digest[:18]}…"
+    )
+
+    # --- Happy multi-node launch (pack plan) ---
+    steps.append("sim_launch multi-node (pack) honesty=l1")
+    ok_launch = sim_launch(
+        LaunchRequest(
+            placement=pack,
+            image_digest=image,
+            entrypoint=["python", "-m", "train"],
+            fabric_mode="auto",
+            honesty_level="l1",
+            node_reports=reports,
+            seed=seed,
+        )
+    )
+    if ok_launch.status != "succeeded":
+        return _fail(
+            NCCL,
+            normalized,
+            (
+                f"expected succeeded launch, got status={ok_launch.status} "
+                f"code={ok_launch.failure_code} reason={ok_launch.reason}"
+            ),
+            steps,
+            None,
+        )
+    if ok_launch.fabric_gate != 1.0:
+        return _fail(
+            NCCL,
+            normalized,
+            f"expected fabric_gate=1.0 on clean launch, got {ok_launch.fabric_gate}",
+            steps,
+            None,
+        )
+    if ok_launch.metrics is None:
+        return _fail(
+            NCCL,
+            normalized,
+            "successful launch missing synthetic NCCL metrics",
+            steps,
+            None,
+        )
+    steps.append(
+        f"launch ok status={ok_launch.status} fabric_gate={ok_launch.fabric_gate} "
+        f"allreduce_gbps={ok_launch.metrics.allreduce_gbps}"
+    )
+
+    # --- fabric_gate fail inject: inventory spoof under fabric=ib ---
+    steps.append("fabric_gate fail inject: inventory_spoof under fabric=ib")
+    ib_plan = place_ranks(
+        PlacementRequest(
+            job_id="sim-nccl-spoof",
+            world_size=2,
+            nnodes=2,
+            nproc_per_node=1,
+            policy="pack",
+            fabric="ib",
+            node_reports=reports,
+        )
+    )
+    if not ib_plan.ok:
+        return _fail(
+            NCCL,
+            normalized,
+            f"ib pack for spoof inject failed: {ib_plan.reason or ib_plan}",
+            steps,
+            None,
+        )
+    spoof = sim_launch(
+        LaunchRequest(
+            placement=ib_plan,
+            image_digest=image,
+            fabric_mode="ib",
+            honesty_level="l1",
+            inventory_spoof=True,
+            node_reports=reports,
+            seed=seed,
+        )
+    )
+    if spoof.fabric_gate != 0.0 or spoof.composite != 0.0:
+        return _fail(
+            NCCL,
+            normalized,
+            (
+                "inventory_spoof inject expected fabric_gate=0 and composite=0, "
+                f"got gate={spoof.fabric_gate} composite={spoof.composite}"
+            ),
+            steps,
+            None,
+        )
+    steps.append(
+        f"inventory_spoof zeros fabric_gate={spoof.fabric_gate} "
+        f"composite={spoof.composite} integrity_fail={spoof.integrity_fail}"
+    )
+
+    # --- fabric_gate fail inject: eth_fallback under fabric=ib ---
+    steps.append("fabric_gate fail inject: eth_fallback_injected under fabric=ib")
+    eth_fb = sim_launch(
+        LaunchRequest(
+            placement=ib_plan,
+            image_digest=image,
+            fabric_mode="ib",
+            honesty_level="l1",
+            eth_fallback_injected=True,
+            node_reports=reports,
+            seed=seed,
+        )
+    )
+    if eth_fb.fabric_gate != 0.0 or eth_fb.composite != 0.0:
+        return _fail(
+            NCCL,
+            normalized,
+            (
+                "eth_fallback inject expected fabric_gate=0 and composite=0, "
+                f"got gate={eth_fb.fabric_gate} composite={eth_fb.composite}"
+            ),
+            steps,
+            None,
+        )
+    steps.append(
+        f"eth_fallback zeros fabric_gate={eth_fb.fabric_gate} "
+        f"composite={eth_fb.composite}"
+    )
+
+    # --- explicit failed inject still produces LaunchResult ---
+    steps.append("status fail inject: inject_status=failed")
+    failed = sim_launch(
+        LaunchRequest(
+            placement=pack,
+            image_digest=image,
+            inject_status="failed",
+            seed=seed,
+        )
+    )
+    if failed.status != "failed":
+        return _fail(
+            NCCL,
+            normalized,
+            f"inject_status=failed expected status=failed, got {failed.status}",
+            steps,
+            None,
+        )
+    steps.append(f"failed inject status={failed.status} code={failed.failure_code}")
+    steps.append("nccl scenario complete (local sim; no real IB)")
+
+    return ScenarioResult(
+        name=NCCL,
+        ok=True,
+        base_url=normalized,
+        message=(
+            "nccl passed: pack/spread multi-node + fabric_gate fail inject "
+            "(inventory_spoof + eth_fallback)"
+        ),
+        steps=steps,
+        identity=None,
+    )
+
+
 def run_weights_scenario(
     base_url: str,
     *,
@@ -969,8 +1293,9 @@ def run_scenario(
     *,
     timeout: float = 15.0,
     shared_token: str | None = None,
+    master_url: str | None = None,
 ) -> ScenarioResult:
-    """Dispatch a named scenario."""
+    """Dispatch a named scenario (architecture §12.3)."""
 
     key = name.strip().lower()
     if key == SMOKE:
@@ -981,6 +1306,8 @@ def run_scenario(
             timeout=timeout,
             shared_token=shared_token,
         )
+    if key == NCCL:
+        return run_nccl_scenario(base_url)
     if key == TEE_OFFLINE:
         return run_tee_offline_scenario(base_url)
     if key == WEIGHTS:
@@ -988,14 +1315,7 @@ def run_scenario(
             base_url,
             timeout=max(timeout, 30.0),
             shared_token=shared_token,
-        )
-    if key == NCCL:
-        return ScenarioResult(
-            name=key,
-            ok=False,
-            base_url=base_url.rstrip("/"),
-            message="scenario 'nccl' not implemented yet (later milestones)",
-            steps=["scenario nccl stub — not implemented"],
+            master_url=master_url,
         )
     return ScenarioResult(
         name=key,
@@ -1015,6 +1335,7 @@ __all__ = [
     "TEE_OFFLINE",
     "WEIGHTS",
     "run_marketplace_scenario",
+    "run_nccl_scenario",
     "run_scenario",
     "run_smoke_scenario",
     "run_tee_offline_scenario",

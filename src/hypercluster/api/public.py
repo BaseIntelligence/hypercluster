@@ -980,6 +980,29 @@ async def leaderboard() -> dict[str, list[object]]:
     return {"items": []}
 
 
+@public_route(tags=["scoring"])
+@router.get("/v1/scores/{hotkey}")
+async def scores_for_hotkey(
+    hotkey: str,
+    session: DbSession,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Per-hotkey score history with four factors visible (VAL-SCORE-001/026).
+
+    Even when composite is 0, each row still exposes correctness, efficiency,
+    fabric_gate, and tee_bonus for forensic debugging.
+    """
+
+    from hypercluster.domain.scoring import list_scores_for_hotkey, score_row_to_public
+
+    rows = await list_scores_for_hotkey(session, hotkey, limit=limit)
+    return {
+        "hotkey": hotkey,
+        "items": [score_row_to_public(row) for row in rows],
+        "count": len(rows),
+    }
+
+
 __all__ = [
     "jobs_attempt_get",
     "jobs_cancel",
@@ -988,6 +1011,7 @@ __all__ = [
     "jobs_get",
     "jobs_post_results",
     "leaderboard",
+    "scores_for_hotkey",
     "leases_get",
     "leases_list",
     "leases_terminate",

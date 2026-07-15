@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hypercluster.db.models import JobProof, Score, utc_now
+from hypercluster.domain.scoring import compute_four_factor
 from hypercluster.settings import HyperSettings, get_hyper_settings
 
 ProofTier = Literal["ordinary", "sim", "tdx", "tdx_gpu_cc", "tdx+gpu_cc"]
@@ -192,11 +193,20 @@ def four_factor_composite(
     tee_bonus: float,
     integrity_zero: bool = False,
 ) -> float:
-    """Product of the four factors; integrity fails force 0."""
+    """Product of the four factors; integrity fails force 0.
 
-    if integrity_zero:
-        return 0.0
-    return float(correctness) * float(efficiency) * float(fabric_gate) * float(tee_bonus)
+    Delegates to :func:`hypercluster.domain.scoring.compute_four_factor` so
+    gate coercion, efficiency floor, and tee_bonus ≥1 rules stay singular
+    (VAL-SCORE-001..007, 021).
+    """
+
+    return compute_four_factor(
+        correctness=correctness,
+        efficiency=efficiency,
+        fabric_gate=fabric_gate,
+        tee_bonus=tee_bonus,
+        integrity_zero=integrity_zero,
+    ).composite
 
 
 def decision_from_proof(
@@ -278,21 +288,34 @@ async def persist_score_for_attempt(
             integrity_zero=decision.integrity_zero,
         )
 
-    composite = four_factor_composite(
+    # Extract integrity inject codes from caller details when present so
+    # VAL-SCORE-007 zeroing applies even when factors look green.
+    integrity_codes: list[str] = []
+    if details:
+        raw_codes = details.get("integrity_codes") or details.get("reason_codes")
+        if isinstance(raw_codes, list):
+            integrity_codes = [str(c) for c in raw_codes]
+
+    breakdown = compute_four_factor(
         correctness=correctness,
         efficiency=efficiency,
         fabric_gate=fabric_gate,
         tee_bonus=bonus,
         integrity_zero=decision.integrity_zero,
+        integrity_codes=integrity_codes or None,
+        hyper=hyper,
     )
 
     detail_blob: dict[str, Any] = {
         "tee_decision": {
-            "tee_bonus": bonus,
+            "tee_bonus": float(breakdown.tee_bonus),
             "applied_tier": decision.applied_tier,
-            "reason_codes": list(decision.reason_codes),
-            "integrity_zero": decision.integrity_zero,
+            "reason_codes": list(
+                dict.fromkeys([*decision.reason_codes, *breakdown.reason_codes])
+            ),
+            "integrity_zero": breakdown.integrity_zero,
         },
+        "factors": breakdown.factors_dict(),
         "proof": (
             {
                 "id": proof.id,
@@ -315,21 +338,21 @@ async def persist_score_for_attempt(
             attempt_id=attempt_id,
             hotkey=hotkey,
             role=role,
-            correctness=float(correctness),
-            efficiency=float(efficiency),
-            fabric_gate=float(fabric_gate),
-            tee_bonus=float(bonus),
-            composite=float(composite),
+            correctness=float(breakdown.correctness),
+            efficiency=float(breakdown.efficiency),
+            fabric_gate=float(breakdown.fabric_gate),
+            tee_bonus=float(breakdown.tee_bonus),
+            composite=float(breakdown.composite),
             details_json=json.dumps(detail_blob, sort_keys=True),
             created_at=utc_now(),
         )
         session.add(row)
     else:
-        row.correctness = float(correctness)
-        row.efficiency = float(efficiency)
-        row.fabric_gate = float(fabric_gate)
-        row.tee_bonus = float(bonus)
-        row.composite = float(composite)
+        row.correctness = float(breakdown.correctness)
+        row.efficiency = float(breakdown.efficiency)
+        row.fabric_gate = float(breakdown.fabric_gate)
+        row.tee_bonus = float(breakdown.tee_bonus)
+        row.composite = float(breakdown.composite)
         row.details_json = json.dumps(detail_blob, sort_keys=True)
         row.hotkey = hotkey
         row.role = role

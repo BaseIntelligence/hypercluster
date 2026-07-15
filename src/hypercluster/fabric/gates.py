@@ -594,21 +594,34 @@ def summarize_gate_for_score(
     efficiency: float = 1.0,
     tee_bonus: float = 1.0,
 ) -> dict[str, Any]:
-    """Four-factor product preview using fabric_gate (library/scoring.md)."""
+    """Four-factor product preview using fabric_gate (library/scoring.md).
 
-    composite = float(correctness) * float(efficiency) * float(gate.fabric_gate) * float(
-        tee_bonus
+    Delegates composite math to domain.scoring so gate coercion + floor +
+    integrity zeroing stay singular with M6 scoring (VAL-SCORE-001..007).
+    """
+
+    from hypercluster.domain.scoring import compute_four_factor, score_breakdown_to_public
+
+    codes = list(gate.reason_codes)
+    if gate.composite_zeroed and "integrity_fail" not in codes:
+        codes.append("integrity_fail")
+    breakdown = compute_four_factor(
+        correctness=correctness,
+        efficiency=efficiency,
+        fabric_gate=gate.fabric_gate,
+        tee_bonus=tee_bonus,
+        integrity_zero=bool(gate.composite_zeroed),
+        integrity_codes=codes,
     )
+    public = score_breakdown_to_public(breakdown)
+    # Preserve gate residual firewall: honesty zero force fabric_gate 0.
     if gate.composite_zeroed:
-        composite = 0.0
-    return {
-        "correctness": float(correctness),
-        "efficiency": float(efficiency),
-        "fabric_gate": float(gate.fabric_gate),
-        "tee_bonus": float(tee_bonus),
-        "composite": composite,
-        "reason_codes": list(gate.reason_codes),
-    }
+        public["fabric_gate"] = 0.0
+        public["composite"] = 0.0
+    public["reason_codes"] = list(
+        dict.fromkeys([*gate.reason_codes, *breakdown.reason_codes])
+    )
+    return public
 
 
 # Re-export for IbDevice type checks by callers that only import gates.

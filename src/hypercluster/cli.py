@@ -447,6 +447,72 @@ def fabric_plan_cmd(
     raise typer.Exit(code=0)
 
 
+@attest_app.command("verify-live")
+def attest_verify_live_cmd(
+    endpoint: str | None = typer.Option(
+        None,
+        "--endpoint",
+        help="Live dstack-verifier URL (unused unless HYPER_TEE_LIVE=1)",
+    ),
+    quote_fixture: Path | None = typer.Option(
+        None,
+        "--quote-fixture",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Optional offline fixture to re-check under live mode",
+    ),
+) -> None:
+    """Live TEE verify path — skip-safe when HYPER_TEE_LIVE is unset (VAL-TEE-014).
+
+    Default CI must not require a live endpoint. When the env flag is unset we
+    exit non-zero with an explicit skip message (handlable, never a traceback).
+    """
+
+    import os
+
+    live = (os.environ.get("HYPER_TEE_LIVE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not live:
+        msg = {
+            "ok": False,
+            "skipped": True,
+            "reason": "live_skipped",
+            "message": "HYPER_TEE_LIVE unset; live verify path skipped (VAL-TEE-014)",
+            "endpoint": endpoint,
+        }
+        typer.echo(json.dumps(msg, indent=2, sort_keys=True))
+        raise typer.Exit(code=2)
+
+    # Live is enabled but not fully wired — fail closed with a clear code, and
+    # never invent a success spoof.
+    from hypercluster.attest.models import TeeVerifyRequest
+    from hypercluster.attest.verify import verify_tee
+
+    quote_b64 = "bGl2ZS1wbGFjZWhvbGRlcg=="  # base64 "live-placeholder"
+    if quote_fixture is not None:
+        from hypercluster.attest.offline_fixtures import load_quote_fixture, package_quote_b64
+
+        env = load_quote_fixture(quote_fixture)
+        quote_b64 = package_quote_b64(env)
+
+    result = verify_tee(
+        TeeVerifyRequest(
+            quote_b64=quote_b64,
+            report_data_expected=b"\x00" * 64,
+            mode="live",
+        )
+    )
+    body = result.to_public()
+    body["endpoint"] = endpoint
+    typer.echo(json.dumps(body, indent=2, sort_keys=True))
+    raise typer.Exit(code=0 if result.is_valid else 1)
+
+
 @attest_app.command("verify-offline")
 def attest_verify_offline_cmd(
     quote_fixture: Path = typer.Option(

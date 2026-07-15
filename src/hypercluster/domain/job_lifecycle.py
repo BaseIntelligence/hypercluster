@@ -470,18 +470,52 @@ async def post_job_results(
         attempt.started_at = job.started_at or now
 
     # Attach proof summary (no secrets). Skip if already attached.
+    # Persist verify_mode + dstack_verdict_json (VAL-TEE-009).
     proofs = [] if created else await get_proofs_for_attempt(session, attempt.id)
     if not proofs:
-        session.add(
-            JobProof(
-                id=str(uuid.uuid4()),
-                attempt_id=attempt.id,
-                proof_tier=proof_tier,
-                payload_json=json.dumps({"sim": True, "result_digest": result_digest}),
-                verified=1 if verified else 0,
-                verify_mode=verify_mode,
-            )
+        from hypercluster.domain.tee_proofs import (
+            ORDINARY_PROOF_TIER,
+            build_sim_proof,
         )
+        from hypercluster.domain.tee_proofs import (
+            SIM_PROOF_TIER as TEE_SIM,
+        )
+
+        tier = (proof_tier or TEE_SIM).strip().lower()
+        mode = (verify_mode or "sim").strip().lower()
+        # For pure sim / ordinary posts keep no-live-bonus invariant.
+        if tier in {TEE_SIM, ORDINARY_PROOF_TIER, "none"} or mode == "sim":
+            proof_row = build_sim_proof(
+                attempt_id=attempt.id,
+                job=job,
+                integrity_fail=not verified,
+            )
+            # Honour caller verified flag if they sealed a sim proof themselves.
+            proof_row.verified = 1 if verified else 0
+            proof_row.proof_tier = tier if tier else proof_row.proof_tier
+            proof_row.verify_mode = mode
+            session.add(proof_row)
+        else:
+            # Non-sim claim without offline verify → unverified (VAL-TEE-008).
+            verdict = {
+                "is_valid": False,
+                "quote_verified": False,
+                "verify_mode": mode,
+                "reason_codes": ["unverified_claim_no_offline_verify"],
+            }
+            session.add(
+                JobProof(
+                    id=str(uuid.uuid4()),
+                    attempt_id=attempt.id,
+                    proof_tier=tier,
+                    payload_json=json.dumps(
+                        {"result_digest": result_digest, "claimed_tier": tier}
+                    ),
+                    verified=0,
+                    verify_mode=mode if mode in {"offline_fixture", "live", "sim"} else "sim",
+                    dstack_verdict_json=json.dumps(verdict),
+                )
+            )
 
     # Persist fabric report view when digest provided.
     if fabric_report_digest:
@@ -907,18 +941,20 @@ async def _collect_success(
                     raw_json=json.dumps(fab),
                 )
             )
+        from hypercluster.domain.tee_proofs import ensure_attempt_proof, score_attempt_with_tee
+
         proofs = await get_proofs_for_attempt(session, attempt.id)
         if not proofs:
-            session.add(
-                JobProof(
-                    id=str(uuid.uuid4()),
-                    attempt_id=attempt.id,
-                    proof_tier=SIM_PROOF_TIER,
-                    payload_json=json.dumps({"sim": True, "tier": SIM_PROOF_TIER}),
-                    verified=1,
-                    verify_mode="sim",
-                )
-            )
+            await ensure_attempt_proof(session, job=job, attempt=attempt)
+        await score_attempt_with_tee(
+            session,
+            job=job,
+            attempt=attempt,
+            correctness=1.0,
+            efficiency=1.0,
+            fabric_gate=1.0,
+            hyper=hyper,
+        )
         return
 
     # Map LaunchResult status → attempt/job (VAL-FAB-014).
@@ -981,26 +1017,33 @@ async def _collect_success(
     if launch_result.failure_code:
         attempt.failure_code = launch_result.failure_code
 
+    from hypercluster.domain.tee_proofs import ensure_attempt_proof, score_attempt_with_tee
+
     proofs = await get_proofs_for_attempt(session, attempt.id)
     if not proofs:
-        session.add(
-            JobProof(
-                id=str(uuid.uuid4()),
-                attempt_id=attempt.id,
-                proof_tier=SIM_PROOF_TIER,
-                payload_json=json.dumps(
-                    {
-                        "sim": True,
-                        "tier": SIM_PROOF_TIER,
-                        "fabric_gate": launch_result.fabric_gate,
-                        "composite": launch_result.composite,
-                        "integrity_fail": launch_result.integrity_fail,
-                    }
-                ),
-                verified=0 if launch_result.integrity_fail else 1,
-                verify_mode="sim",
-            )
+        # VAL-TEE-005/009/015: sim/ordinary proof with verdict JSON; no live bonus.
+        await ensure_attempt_proof(
+            session,
+            job=job,
+            attempt=attempt,
+            integrity_fail=bool(launch_result.integrity_fail),
+            fabric_gate=float(launch_result.fabric_gate),
         )
+
+    # Persist four-factor score; tee_bonus locked to 1.0 for sim/ordinary.
+    efficiency = 1.0
+    if launch_result.metrics is not None:
+        efficiency = float(getattr(launch_result.metrics, "efficiency", 1.0) or 1.0)
+    await score_attempt_with_tee(
+        session,
+        job=job,
+        attempt=attempt,
+        correctness=0.0 if launch_result.integrity_fail else 1.0,
+        efficiency=efficiency,
+        fabric_gate=float(launch_result.fabric_gate),
+        hyper=hyper,
+        integrity_fail=bool(launch_result.integrity_fail),
+    )
 
     report = await get_fabric_report(session, job.id)
     if report is None:

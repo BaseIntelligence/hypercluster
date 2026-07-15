@@ -649,12 +649,74 @@ class JobProof(Base):
     def to_public_summary(self) -> dict[str, Any]:
         """Summary shape without raw quotes or secret material."""
 
+        verdict: Any = None
+        if self.dstack_verdict_json:
+            try:
+                verdict = json.loads(self.dstack_verdict_json)
+            except (TypeError, ValueError):
+                verdict = None
         return {
             "id": self.id,
             "attempt_id": self.attempt_id,
             "proof_tier": self.proof_tier,
             "verified": bool(self.verified),
             "verify_mode": self.verify_mode,
+            "dstack_verdict": verdict,
+            "has_quote": bool(self.tdx_quote_b64),
+            "has_gpu_evidence": bool(self.gpu_evidence_json),
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
+class Score(Base):
+    """Per-attempt four-factor score row (architecture §3.1 / §10).
+
+    composite = correctness × efficiency × fabric_gate × tee_bonus
+    tee_bonus > 1.0 only when corresponding job_proofs.verified==1 (VAL-TEE-020).
+    """
+
+    __tablename__ = "scores"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("job_attempts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        unique=True,
+    )
+    hotkey: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="demand")
+    correctness: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    efficiency: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    fabric_gate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    tee_bonus: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    composite: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        details: Any = None
+        if self.details_json:
+            try:
+                details = json.loads(self.details_json)
+            except (TypeError, ValueError):
+                details = self.details_json
+        return {
+            "id": self.id,
+            "attempt_id": self.attempt_id,
+            "hotkey": self.hotkey,
+            "role": self.role,
+            "correctness": float(self.correctness),
+            "efficiency": float(self.efficiency),
+            "fabric_gate": float(self.fabric_gate),
+            "tee_bonus": float(self.tee_bonus),
+            "composite": float(self.composite),
+            "details": details,
             "created_at": isoformat_utc(self.created_at),
         }
 
@@ -836,6 +898,7 @@ __all__ = [
     "Pod",
     "Provider",
     "RequestNonce",
+    "Score",
     "isoformat_utc",
     "utc_now",
 ]

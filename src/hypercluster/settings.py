@@ -20,6 +20,10 @@ class Settings(ChallengeSettings):
     database_url, shared token). Default DB URL is challenge SQLite on `/data`.
     Product knobs live on :class:`HyperSettings` under the `HYPER_` prefix so
     they never collide with Base `CHALLENGE_*` identity fields.
+
+    Capability alignment (VAL-TEE-015 / VAL-SCAF-033): enable
+    ``challenge.tee_verification`` because offline TEE verify is a first-class
+    path; ordinary proof remains available for tee=none jobs.
     """
 
     model_config = SettingsConfigDict(env_prefix="CHALLENGE_", extra="forbid")
@@ -30,6 +34,16 @@ class Settings(ChallengeSettings):
     api_version: str = API_VERSION
     sdk_version: str = SDK_CONTRACT_VERSION
     database_url: str = DEFAULT_DATABASE_URL
+    # Offline TEE path is product-complete for CI (M5). Live path remains
+    # skip-safe behind HYPER_TEE_LIVE. Enabling the SDK flag expands the
+    # capabilities set with challenge.tee_verification (VAL-TEE-015).
+    tee_verification_enabled: bool = True
+    capabilities: tuple[str, ...] = (
+        "challenge.scoring",
+        "challenge.ordinary_proof",
+        "challenge.tee_verification",
+        "challenge.state",
+    )
     # Local/dev default allows env-only configuration; containers should mount
     # the shared file at the default Base secret path.
     shared_token_file: str | None = Field(

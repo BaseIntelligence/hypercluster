@@ -7,12 +7,17 @@ Pipeline stages (all reason_codes collected, fail-closed conjunction):
 4. Compose hash vs expected + allowlist
 5. TCB / advisory policy
 6. Event-log / os image flags (fixture-level offline)
+7. GPU evidence NRAS mock schema when evidence is present / tdx+gpu_cc
+8. mode=offline_fixture never dials remote dstack-verifier (VAL-TEE-019)
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Any
 
+from hypercluster.attest.gpu_evidence import validate_gpu_evidence
 from hypercluster.attest.models import TeeVerifyRequest, TeeVerifyResult
 from hypercluster.attest.offline_fixtures import (
     OfflineQuoteEnvelope,
@@ -31,30 +36,61 @@ def _unique_codes(codes: list[str]) -> list[str]:
     return list(dict.fromkeys(c for c in codes if c))
 
 
+def _live_enabled() -> bool:
+    """True only when HYPER_TEE_LIVE is affirmatively set/opted-in."""
+
+    raw = (os.environ.get("HYPER_TEE_LIVE") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    try:
+        from hypercluster.settings import get_hyper_settings
+
+        return bool(get_hyper_settings().tee_live)
+    except Exception:  # noqa: BLE001 — settings import fail → skip-safe
+        return False
+
+
 def verify_tee(
     request: TeeVerifyRequest,
     *,
     policy: TeeVerifyPolicy | None = None,
+    require_gpu_evidence: bool = False,
+    expected_gpu_nonce: str | None = None,
+    httpx_client: Any | None = None,
 ) -> TeeVerifyResult:
     """Verify a TeeVerifyRequest under the given policy.
 
-    ``offline_fixture`` mode is fully in-process and never dials the network.
-    ``live`` is not implemented here (skip/unavailable — later slice).
-    ``sim`` accepts only envelopes marked quote_sig_ok with sim tee_type if
-    policy allowlist passes; otherwise same pipeline as offline.
+    ``offline_fixture`` mode is fully in-process and never dials the network
+    (VAL-TEE-019). ``httpx_client`` is accepted for injectability but is **never
+    used** when mode is offline_fixture/sim — tests can assert zero outbound.
+
+    ``live`` is skip-safe when HYPER_TEE_LIVE is unset (VAL-TEE-014).
     """
 
     pol = policy if policy is not None else default_policy_from_settings()
     mode = request.mode
     reasons: list[str] = []
 
+    # Guarantee offline modes never touch a network client if caller passed one.
+    if mode in {"offline_fixture", "sim"}:
+        httpx_client = None  # noqa: F841 — drop for anti-leak; never dialed.
+
     if mode == "live":
-        # Live path owned by later M5 feature / optional HYPER_TEE_LIVE.
+        if not _live_enabled():
+            return TeeVerifyResult(
+                is_valid=False,
+                quote_verified=False,
+                tcb_status="unknown",
+                reason_codes=["live_skipped", "hyper_tee_live_unset"],
+                verify_mode="live",
+            )
+        # Live remote path is optional; when enabled without an endpoint we still
+        # fail closed rather than invent a spoofed success.
         return TeeVerifyResult(
             is_valid=False,
             quote_verified=False,
             tcb_status="unknown",
-            reason_codes=["live_not_available"],
+            reason_codes=["live_not_available", "live_endpoint_unconfigured"],
             verify_mode="live",
         )
 
@@ -158,6 +194,30 @@ def verify_tee(
         if request.event_log != env.event_log:
             reasons.append("event_log_mismatch")
             event_log_ok = False
+
+    # 7. GPU evidence mock NRAS schema (VAL-TEE-012).
+    # Required when caller forces require_gpu_evidence, or tee_type is gpu tier,
+    # or request already carries gpu_evidence / envelope declares it.
+    gpu_payload = request.gpu_evidence if request.gpu_evidence is not None else env.gpu_evidence
+    tee_type = (env.tee_type or "tdx").strip().lower()
+    needs_gpu = require_gpu_evidence or tee_type in {
+        "tdx+gpu_cc",
+        "tdx_gpu_cc",
+        "tdx+gpu-cc",
+    }
+    if needs_gpu or gpu_payload is not None:
+        # Prefer explicit expected_gpu_nonce, else envelope.nonce when present.
+        nonce_expected = expected_gpu_nonce
+        if nonce_expected is None and env.nonce:
+            nonce_expected = env.nonce
+        gpu_ok, gpu_reasons, _evidence = validate_gpu_evidence(
+            gpu_payload,
+            expected_nonce=nonce_expected,
+            require=needs_gpu,
+        )
+        if not gpu_ok:
+            reasons.extend(gpu_reasons)
+            quote_ok = False
 
     # Conjunctive validity: any hard reason fails closed (soft tags excluded).
     soft_only = frozenset({"tcb_advisory_soft"})

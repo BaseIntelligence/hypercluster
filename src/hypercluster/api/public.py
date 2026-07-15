@@ -168,7 +168,13 @@ class JobCancelRequest(BaseModel):
 
 
 class JobResultsRequest(BaseModel):
-    """Provider/worker result envelope (VAL-JOB-009 attempt-keyed)."""
+    """Provider/worker result envelope (VAL-JOB-009 attempt-keyed).
+
+    Optional TEE fields (VAL-TEE-008/009/012): when quote_b64 is provided with
+    verify_mode=offline_fixture the challenge verifies offline and persists
+    dstack_verdict_json + verified flag. Garbage quotes stay unverified and get
+    no tee_bonus.
+    """
 
     attempt_no: int = Field(default=1, ge=1)
     status: str = Field(default="succeeded", max_length=32)
@@ -179,6 +185,11 @@ class JobResultsRequest(BaseModel):
     verified: bool = True
     verify_mode: str = Field(default="sim", max_length=32)
     failure_code: str | None = Field(default=None, max_length=64)
+    # Optional offline TEE material.
+    quote_b64: str | None = None
+    gpu_evidence: dict[str, Any] | None = None
+    report_data_hex: str | None = None
+    tee_nonce: str | None = None
 
 
 def _header_hotkey(request: Request) -> str | None:
@@ -873,6 +884,7 @@ async def jobs_post_results(
     identity: RequireMiner,
     session: DbSession,
     body: JobResultsRequest,
+    request: Request,
 ) -> dict[str, Any]:
     """Provider/worker result envelope; attempt-keyed idempotent (VAL-JOB-009)."""
 
@@ -896,6 +908,64 @@ async def jobs_post_results(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+
+    # Optional offline TEE upgrade path on results post (VAL-TEE-006..009/012).
+    if body.quote_b64:
+        from hypercluster.attest.report_data import build_report_data
+        from hypercluster.domain.job_lifecycle import get_proofs_for_attempt
+        from hypercluster.domain.jobs import get_job as _get_job
+        from hypercluster.domain.scoring_tee import persist_score_for_attempt
+        from hypercluster.domain.tee_proofs import verify_and_build_proof
+
+        job = await _get_job(session, job_id)
+        if job is not None:
+            report_data: bytes
+            if body.report_data_hex:
+                report_data = bytes.fromhex(body.report_data_hex)
+            else:
+                nonce = body.tee_nonce or "results-default-nonce"
+                report_data = build_report_data(
+                    job_id=job.id,
+                    image_digest=job.image_digest,
+                    nonce=nonce,
+                )
+            # Drop any sim placeholder before attaching offline verified proof.
+            existing = await get_proofs_for_attempt(session, attempt.id)
+            for row in existing:
+                await session.delete(row)
+            await session.flush()
+            mode = (
+                body.verify_mode
+                if body.verify_mode in {"offline_fixture", "live", "sim"}
+                else "offline_fixture"
+            )
+            proof, _result = verify_and_build_proof(
+                attempt_id=attempt.id,
+                job=job,
+                quote_b64=body.quote_b64,
+                report_data_expected=report_data,
+                gpu_evidence=body.gpu_evidence,
+                mode=mode,
+                expected_gpu_nonce=body.tee_nonce,
+            )
+            session.add(proof)
+            metrics = body.metrics or {}
+            efficiency = float(metrics.get("efficiency", 1.0) or 1.0)
+            fabric_gate = float(metrics.get("fabric_gate", 1.0) or 1.0)
+            hyper = getattr(request.app.state, "hyper_settings", None)
+            await persist_score_for_attempt(
+                session,
+                attempt_id=attempt.id,
+                hotkey=job.submitter_hotkey,
+                correctness=1.0 if proof.verified else 0.0,
+                efficiency=efficiency,
+                fabric_gate=fabric_gate,
+                proof=proof,
+                tee_mode=job.tee_mode or "none",
+                hyper=hyper,
+            )
+            await session.commit()
+
     payload = attempt_to_public(attempt)
     payload["created"] = created
     payload["attempt"] = attempt_to_public(attempt)

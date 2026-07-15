@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from hypercluster.sim.cross_docker_scenario_proxy import (
+    docker_available,
+    probe_port_free,
+    probe_relative_proxy_paths,
+    run_cross_docker_scenario_proxy,
+    run_docker_health_then_api_job,
+    run_docker_stop_remove_rebind_free,
+    run_scenario_suite_order_green,
+)
 from hypercluster.sim.cross_happy_path import (
     EgressTrace,
     capture_httpx_egress,
@@ -49,6 +58,7 @@ from hypercluster.sim.inventory import (
 from hypercluster.sim.orchestration import (
     DEFAULT_SCENARIO_ORDER,
     SuiteResult,
+    run_cross_docker_scenario_proxy_bundle,
     run_cross_happy_path_bundle,
     run_cross_market_resilience_auth_bundle,
     run_cross_multinode_fabric_tee_bundle,
@@ -65,6 +75,7 @@ from hypercluster.sim.ports import (
     mission_port_band,
 )
 from hypercluster.sim.scenarios import (
+    CROSS_DOCKER_SCENARIO_PROXY,
     CROSS_HAPPY_PATH,
     CROSS_MARKET_RESILIENCE,
     CROSS_MULTINODE,
@@ -87,6 +98,7 @@ from hypercluster.sim.seed import (
 )
 
 __all__ = [
+    "CROSS_DOCKER_SCENARIO_PROXY",
     "CROSS_HAPPY_PATH",
     "CROSS_MARKET_RESILIENCE",
     "CROSS_MULTINODE",
@@ -113,13 +125,18 @@ __all__ = [
     "check_port_band_discipline",
     "check_sim_backends",
     "default_sim_inventory",
+    "docker_available",
     "inventory_shape_digest",
     "mission_port_band",
     "plan_readiness",
     "probe_identity_gates",
+    "probe_port_free",
+    "probe_relative_proxy_paths",
     "resolve_sim_seed",
     "run_cross_cancel_cleans_bindings",
     "run_cross_combined_worker_full_path",
+    "run_cross_docker_scenario_proxy",
+    "run_cross_docker_scenario_proxy_bundle",
     "run_cross_double_rent_recover",
     "run_cross_drain_ready_503",
     "run_cross_happy_path",
@@ -144,12 +161,15 @@ __all__ = [
     "run_cross_weights_leaderboard_selfdeal_bundle",
     "run_cross_worker_durability_paths",
     "run_cross_worker_durability_paths_bundle",
+    "run_docker_health_then_api_job",
+    "run_docker_stop_remove_rebind_free",
     "run_doctor",
     "run_marketplace_scenario",
     "run_named_scenarios",
     "run_nccl_scenario",
     "run_scenario",
     "run_scenario_suite",
+    "run_scenario_suite_order_green",
     "run_smoke_scenario",
     "run_tee_offline_scenario",
     "run_weights_scenario",

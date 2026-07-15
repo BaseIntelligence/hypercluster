@@ -23,6 +23,10 @@ Weights / leaderboard / self-deal / mock-master chaos lives in
 :mod:`hypercluster.sim.cross_weights_leaderboard_selfdeal` as
 ``cross-weights-leaderboard-selfdeal`` (VAL-CROSS-012/019/020/027).
 
+Docker health→API job, suite order green, stop/rm rebind, relative /v1 paths
+live in :mod:`hypercluster.sim.cross_docker_scenario_proxy` as
+``cross-docker-scenario-proxy`` (VAL-CROSS-007/018/022/023).
+
 See hypercluster.sim.orchestration for the reusable multi-scenario suite runner.
 """
 
@@ -50,6 +54,7 @@ CROSS_MULTINODE = "cross-multinode-fabric-tee"
 CROSS_MARKET_RESILIENCE = "cross-market-resilience-auth"
 CROSS_WORKER_DURABILITY = "cross-worker-durability-paths"
 CROSS_WEIGHTS_LEADERBOARD = "cross-weights-leaderboard-selfdeal"
+CROSS_DOCKER_SCENARIO_PROXY = "cross-docker-scenario-proxy"
 
 # Architecture §12.3 names remain the five canonical suite scenarios.
 KNOWN_SCENARIOS = (SMOKE, MARKETPLACE, NCCL, TEE_OFFLINE, WEIGHTS)
@@ -60,6 +65,7 @@ EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (
     CROSS_MARKET_RESILIENCE,
     CROSS_WORKER_DURABILITY,
     CROSS_WEIGHTS_LEADERBOARD,
+    CROSS_DOCKER_SCENARIO_PROXY,
 )
 
 # Deterministic local-sim hotkeys (not real ss58; HMAC insecure mode).
@@ -1420,6 +1426,26 @@ def run_scenario(
             master_url=master_url,
             include_master_chaos=True,
         )
+    if key in {
+        CROSS_DOCKER_SCENARIO_PROXY,
+        "cross_docker_scenario_proxy",
+        "cross-docker-scenario",
+        "docker-scenario-proxy",
+    }:
+        from hypercluster.sim.cross_docker_scenario_proxy import (
+            run_cross_docker_scenario_proxy,
+        )
+
+        return run_cross_docker_scenario_proxy(
+            base_url,
+            timeout=max(timeout, 90.0),
+            shared_token=shared_token,
+            master_url=master_url,
+            # Docker is expensive; CLI path enables when daemon available.
+            include_docker=True,
+            include_suite=True,
+            include_proxy=True,
+        )
     return ScenarioResult(
         name=key,
         ok=False,
@@ -1433,6 +1459,7 @@ def run_scenario(
 
 
 __all__ = [
+    "CROSS_DOCKER_SCENARIO_PROXY",
     "CROSS_HAPPY_PATH",
     "CROSS_MARKET_RESILIENCE",
     "CROSS_MULTINODE",

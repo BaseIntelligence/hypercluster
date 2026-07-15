@@ -323,12 +323,51 @@ def run_cross_weights_leaderboard_selfdeal_bundle(
     )
 
 
+def run_cross_docker_scenario_proxy_bundle(
+    base_url: str,
+    *,
+    timeout: float = 90.0,
+    shared_token: str | None = None,
+    master_url: str | None = None,
+    include_docker: bool = True,
+    include_suite: bool = True,
+    include_proxy: bool = True,
+    app: Any | None = None,
+    docker_host_port: int | None = None,
+    **kwargs: Any,
+) -> ScenarioResult:
+    """VAL-CROSS-007/018/022/023 Docker health→API, suite order, rebind, /v1 paths."""
+
+    from hypercluster.sim.cross_docker_scenario_proxy import (
+        DEFAULT_CROSS_DOCKER_HOST_PORT,
+        run_cross_docker_scenario_proxy,
+    )
+
+    _ = kwargs
+    return run_cross_docker_scenario_proxy(
+        base_url,
+        timeout=timeout,
+        shared_token=shared_token,
+        master_url=master_url,
+        include_docker=include_docker,
+        include_suite=include_suite,
+        include_proxy=include_proxy,
+        app=app,
+        docker_host_port=(
+            DEFAULT_CROSS_DOCKER_HOST_PORT
+            if docker_host_port is None
+            else int(docker_host_port)
+        ),
+    )
+
+
 __all__ = [
     "DEFAULT_SCENARIO_ORDER",
     "FABRIC_SCENARIOS",
     "HAPPY_PATH_SCENARIOS",
     "SuiteResult",
     "normalize_scenario_names",
+    "run_cross_docker_scenario_proxy_bundle",
     "run_cross_happy_path_bundle",
     "run_cross_market_resilience_auth_bundle",
     "run_cross_multinode_fabric_tee_bundle",

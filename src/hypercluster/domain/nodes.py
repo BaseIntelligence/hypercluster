@@ -303,7 +303,27 @@ async def mark_stale_nodes_offline(
 
 
 def node_to_public(node: Node) -> dict[str, Any]:
-    return node.to_dict()
+    """Public node DTO including gpu_probe_status when present (VAL-GPU-010).
+
+    Register alone never invents ``verified`` silicon status — only probe
+    evidence merge (or external attach) stamps measured inventory fields.
+    """
+
+    body = node.to_dict()
+    inv = body.get("inventory")
+    status = None
+    if isinstance(inv, dict):
+        status = inv.get("gpu_probe_status")
+    # Surface top-level for API consumers; default explicit non-verified.
+    if not status:
+        status = "none"
+    body["gpu_probe_status"] = status
+    if isinstance(inv, dict):
+        if inv.get("gpu_uuids") is not None:
+            body["gpu_uuids"] = inv.get("gpu_uuids")
+        if inv.get("measured_gpu_count") is not None:
+            body["measured_gpu_count"] = inv.get("measured_gpu_count")
+    return body
 
 
 def node_has_ib(node: Node) -> bool:

@@ -22,6 +22,18 @@ from hypercluster.domain.fabric_reports import (
     get_latest_fabric_report,
     report_to_public,
 )
+from hypercluster.domain.gpu_probes import (
+    GpuProbeError,
+    attach_external_evidence,
+    evidence_to_public,
+    evidence_to_summary,
+    get_evidence_global,
+    get_latest_node_evidence,
+    get_node_evidence,
+    list_node_evidence,
+    run_node_gpu_probe,
+    soft_heartbeat_probe_meta,
+)
 from hypercluster.domain.job_lifecycle import (
     attempt_to_public,
     cancel_job,
@@ -105,6 +117,31 @@ class NodeRegisterRequest(BaseModel):
 
 class NodeHeartbeatRequest(BaseModel):
     node_id: str | None = Field(default=None, max_length=36)
+
+
+class GpuProbeRequest(BaseModel):
+    """Start GPU probe on a owned node (VAL-GPU-001).
+
+    Never accept raw PEM: only optional key_ref {kind,name} for env/file.
+    """
+
+    mode: str = Field(default="full", max_length=16)
+    timeout_s: int | None = Field(default=None, ge=1, le=3600)
+    # key_ref only (kind=env|file, name). private keys in body are rejected.
+    key_ref: dict[str, str] | None = None
+    # CI/FakeSsh: optional fixture name override (ignored when real transport).
+    fixture: str | None = Field(default=None, max_length=64)
+
+    model_config = {"extra": "forbid"}
+
+
+class ExternalGpuEvidenceRequest(BaseModel):
+    """Ops attach of externally gathered evidence (VAL-GPU-006)."""
+
+    evidence: dict[str, Any]
+    claimed_digest: str | None = Field(default=None, max_length=128)
+
+    model_config = {"extra": "forbid"}
 
 
 class FabricScanRequest(BaseModel):
@@ -389,13 +426,22 @@ async def nodes_heartbeat(
     request: Request,
     body: NodeHeartbeatRequest | None = None,
 ) -> dict[str, Any]:
-    """Refresh last_heartbeat for owned node(s) (VAL-MKT-006)."""
+    """Refresh last_heartbeat for owned node(s) (VAL-MKT-006 / VAL-GPU-011).
+
+    Under ``HYPER_REQUIRE_LIVE_EVIDENCE``, unverified nodes get soft-warning
+    metadata (or soft 409 when mode is fail_closed). Never 5xx solely due to
+    missing probe evidence defaults.
+    """
 
     req = body if body is not None else NodeHeartbeatRequest()
     hyper = getattr(request.app.state, "hyper_settings", None)
     liveness = 120
+    require_ev = False
+    require_mode = "soft"
     if hyper is not None:
         liveness = int(getattr(hyper, "node_liveness_seconds", 120))
+        require_ev = bool(getattr(hyper, "require_live_evidence", False))
+        require_mode = str(getattr(hyper, "require_live_evidence_mode", "soft") or "soft")
     try:
         nodes = await node_heartbeat(
             session,
@@ -408,7 +454,29 @@ async def nodes_heartbeat(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
-    return {"items": [node_to_public(n) for n in nodes]}
+
+    meta = soft_heartbeat_probe_meta(
+        nodes,
+        require_live_evidence=require_ev,
+        mode=require_mode,
+    )
+    if meta.get("block_status") == 409:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": meta.get("code") or "gpu_probe_unverified",
+                "message": meta.get("message")
+                or "live evidence required for heartbeat",
+                "unverified_node_ids": meta.get("unverified_node_ids") or [],
+            },
+        )
+    payload: dict[str, Any] = {"items": [node_to_public(n) for n in nodes]}
+    if require_ev:
+        payload["require_live_evidence"] = True
+        payload["gpu_probe_warning"] = bool(meta.get("gpu_probe_warning"))
+        payload["unverified_node_ids"] = list(meta.get("unverified_node_ids") or [])
+        payload["require_live_evidence_mode"] = require_mode
+    return payload
 
 
 @public_route(tags=["marketplace"])
@@ -426,6 +494,145 @@ async def nodes_get(
             detail={"code": "node_not_found", "message": "node not found"},
         )
     return node_to_public(node)
+
+
+@public_route(tags=["gpu-probe"])
+@router.post("/v1/nodes/{node_id}/probes/gpu", status_code=status.HTTP_200_OK)
+async def nodes_probe_gpu(
+    node_id: str,
+    body: GpuProbeRequest,
+    identity: RequireMiner,
+    session: DbSession,
+    request: Request,
+) -> dict[str, Any]:
+    """Start SSH GPU probe (owner-signed; FakeSsh pass-all → status=passed).
+
+    VAL-GPU-001 / never accept raw PEM / never set_weights.
+    """
+
+    hyper = getattr(request.app.state, "hyper_settings", None)
+    raw_body = body.model_dump(mode="json")
+    try:
+        evidence, _row = await run_node_gpu_probe(
+            session,
+            node_id=node_id,
+            hotkey=identity.hotkey,
+            mode="quick" if str(body.mode).lower() == "quick" else "full",
+            timeout_s=body.timeout_s,
+            key_ref=body.key_ref,
+            fixture_name=body.fixture,
+            body=raw_body,
+            settings=hyper,
+        )
+    except GpuProbeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return evidence_to_public(evidence)
+
+
+@public_route(tags=["gpu-probe"])
+@router.get("/v1/nodes/{node_id}/probes/gpu/latest")
+async def nodes_probe_gpu_latest(
+    node_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Latest GPU evidence for a node (black-box GET; VAL-GPU-002)."""
+
+    row = await get_latest_node_evidence(session, node_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "gpu_evidence_not_found",
+                "message": "no GPU evidence for node",
+            },
+        )
+    return evidence_to_public(row)
+
+
+@public_route(tags=["gpu-probe"])
+@router.get("/v1/nodes/{node_id}/probes/gpu/{evidence_id}")
+async def nodes_probe_gpu_by_id(
+    node_id: str,
+    evidence_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Evidence by id with checks + redacted raw (VAL-GPU-003)."""
+
+    row = await get_node_evidence(session, node_id, evidence_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "gpu_evidence_not_found",
+                "message": "evidence not found for node",
+            },
+        )
+    return evidence_to_public(row)
+
+
+@public_route(tags=["gpu-probe"])
+@router.get("/v1/nodes/{node_id}/probes/gpu")
+async def nodes_probe_gpu_list(
+    node_id: str,
+    session: DbSession,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    """List evidence newest-first; empty for unknown/unprobed node (VAL-GPU-004)."""
+
+    rows = await list_node_evidence(session, node_id, limit=limit)
+    return {"items": [evidence_to_summary(r) for r in rows]}
+
+
+@public_route(tags=["gpu-probe"])
+@router.get("/v1/evidence/gpu/{evidence_id}")
+async def evidence_gpu_global(
+    evidence_id: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Global evidence lookup by id (VAL-GPU-005)."""
+
+    row = await get_evidence_global(session, evidence_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "gpu_evidence_not_found",
+                "message": "evidence not found",
+            },
+        )
+    return evidence_to_public(row)
+
+
+@public_route(tags=["gpu-probe"])
+@router.post("/v1/nodes/{node_id}/evidence/gpu", status_code=status.HTTP_200_OK)
+async def nodes_evidence_gpu_attach(
+    node_id: str,
+    body: ExternalGpuEvidenceRequest,
+    identity: RequireMiner,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Owner-signed external evidence attach; reject bad digests (VAL-GPU-006)."""
+
+    try:
+        evidence, _row = await attach_external_evidence(
+            session,
+            node_id=node_id,
+            hotkey=identity.hotkey,
+            evidence_payload=body.evidence,
+            claimed_digest=body.claimed_digest,
+            body=body.model_dump(mode="json"),
+        )
+    except GpuProbeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    payload = evidence_to_public(evidence)
+    payload["attached"] = True
+    return payload
 
 
 @public_route(tags=["fabric"])
@@ -1224,6 +1431,12 @@ __all__ = [
     "nodes_get",
     "nodes_heartbeat",
     "nodes_list",
+    "nodes_probe_gpu",
+    "nodes_probe_gpu_by_id",
+    "nodes_probe_gpu_latest",
+    "nodes_probe_gpu_list",
+    "nodes_evidence_gpu_attach",
+    "evidence_gpu_global",
     "nodes_register",
     "offers_create",
     "offers_get",

@@ -969,8 +969,87 @@ class RequestNonce(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class GpuHostEvidenceRow(Base):
+    """Persisted GPU host probe evidence (M9; never stores private keys).
+
+    Full colorful document is in ``evidence_json`` (redacted). Summary columns
+    support newest-first list + digest/uuid lookups without full reparse.
+    """
+
+    __tablename__ = "gpu_host_evidence"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    node_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("nodes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    provider_hotkey: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # passed|failed|error
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="failed")
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="full")
+    transport: Mapped[str] = mapped_column(String(16), nullable=False, default="fake")
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    key_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    key_ref_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    checks_passed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checks_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    measured_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    gpu_uuids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    digests_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # probe|external
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="probe")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        try:
+            digests = json.loads(self.digests_json or "{}")
+        except (TypeError, ValueError):
+            digests = {}
+        try:
+            uuids = json.loads(self.gpu_uuids_json or "[]")
+        except (TypeError, ValueError):
+            uuids = []
+        return {
+            "id": self.id,
+            "node_id": self.node_id,
+            "provider_hotkey": self.provider_hotkey,
+            "status": self.status,
+            "mode": self.mode,
+            "transport": self.transport,
+            "failure_code": self.failure_code,
+            "key_fingerprint": self.key_fingerprint,
+            "started_at": isoformat_utc(self.started_at),
+            "finished_at": isoformat_utc(self.finished_at),
+            "checks_passed": int(self.checks_passed or 0),
+            "checks_failed": int(self.checks_failed or 0),
+            "measured_gpu_count": int(self.measured_gpu_count or 0),
+            "gpu_uuids": uuids if isinstance(uuids, list) else [],
+            "digests": digests if isinstance(digests, dict) else {},
+            "source": self.source,
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
 __all__ = [
     "FabricReportRow",
+    "GpuHostEvidenceRow",
     "Job",
     "JobAttempt",
     "JobFabricReport",

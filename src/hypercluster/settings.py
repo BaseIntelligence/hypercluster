@@ -165,6 +165,12 @@ class HyperSettings(BaseSettings):
     ssh_cmd_timeout_s: float = Field(default=90.0, ge=1.0)
     ssh_output_cap_bytes: int = Field(default=65536, ge=1024)
     ssh_username: str = Field(default="root")
+    # Live evidence gating for advertise/heartbeat (VAL-GPU-010/011).
+    # require_live_evidence=false (default) keeps sim/CI backlog hearts green.
+    # mode=soft → heartbeat returns 200 with advisory warning; hard/fail_closed → 409.
+    # Env: HYPER_REQUIRE_LIVE_EVIDENCE, HYPER_REQUIRE_LIVE_EVIDENCE_MODE.
+    require_live_evidence: bool = False
+    require_live_evidence_mode: str = Field(default="soft")  # soft|hard|fail_closed
 
     def _split_csv(self, raw: str) -> list[str]:
         return [part.strip() for part in (raw or "").split(",") if part.strip()]

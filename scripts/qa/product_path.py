@@ -456,3 +456,196 @@ def terminate_lease_idempotent(
                     f"lease terminate pass {i + 1} server error: {resp.status_code} {resp.text}"
                 )
     return outcomes
+
+
+def _key_ref_body(key_ref: str | dict[str, str] | None) -> dict[str, str] | None:
+    """Normalize ops key_ref into product API body dict (never PEM)."""
+
+    if key_ref is None:
+        return None
+    if isinstance(key_ref, dict):
+        kind = str(key_ref.get("kind") or "file")
+        name = str(key_ref.get("name") or "")
+        if not name:
+            return None
+        return {"kind": kind, "name": name}
+    raw = str(key_ref).strip()
+    if not raw:
+        return None
+    if raw.startswith("file:"):
+        return {"kind": "file", "name": raw[5:]}
+    if raw.startswith("env:"):
+        return {"kind": "env", "name": raw[4:]}
+    # Bare path → file ref.
+    return {"kind": "file", "name": raw}
+
+
+def run_product_gpu_probe(
+    base_url: str,
+    *,
+    secret: str,
+    node_id: str,
+    key_ref: str | dict[str, str] | None = None,
+    mode: str = "full",
+    timeout_s: int | None = 240,
+    fixture: str | None = None,
+    hotkey: str = PROVIDER_HK,
+    http_timeout: float = 300.0,
+) -> tuple[dict[str, Any], list[str]]:
+    """Owner-signed POST /v1/nodes/{id}/probes/gpu (+ GET latest) for M9 evidence store.
+
+    Product process must be started with real transport + key path when live,
+    or FakeSsh + fixture for offline. Never accepts raw PEM in the body.
+    """
+
+    base = base_url.rstrip("/")
+    steps: list[str] = []
+    body: dict[str, Any] = {
+        "mode": "quick" if str(mode).lower() == "quick" else "full",
+    }
+    if timeout_s is not None:
+        body["timeout_s"] = int(timeout_s)
+    ref = _key_ref_body(key_ref)
+    if ref is not None:
+        body["key_ref"] = ref
+    if fixture:
+        body["fixture"] = str(fixture)
+
+    with httpx.Client(timeout=http_timeout) as client:
+        steps.append("POST product gpu probe")
+        resp = signed_request(
+            client,
+            "POST",
+            f"{base}/v1/nodes/{node_id}/probes/gpu",
+            secret=secret,
+            hotkey=hotkey,
+            body=body,
+        )
+        payload = _safe_json(resp)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"product gpu probe HTTP {resp.status_code}: {payload}"
+            )
+        evidence_id = None
+        if isinstance(payload, dict):
+            evidence_id = payload.get("evidence_id") or payload.get("id")
+        steps.append(f"probe status={payload.get('status') if isinstance(payload, dict) else None}")
+        steps.append(f"evidence_id={evidence_id}")
+
+        latest = client.get(f"{base}/v1/nodes/{node_id}/probes/gpu/latest")
+        latest_body = _safe_json(latest)
+        if latest.status_code != 200:
+            raise RuntimeError(
+                f"GET latest evidence HTTP {latest.status_code}: {latest_body}"
+            )
+        latest_id = None
+        if isinstance(latest_body, dict):
+            latest_id = latest_body.get("evidence_id") or latest_body.get("id")
+        if not latest_id:
+            raise RuntimeError("product store returned null evidence id")
+        steps.append(f"latest_evidence_id={latest_id}")
+
+        node_resp = client.get(f"{base}/v1/nodes/{node_id}")
+        node_body = _safe_json(node_resp) if node_resp.status_code == 200 else {}
+        gpu_probe_status = None
+        if isinstance(node_body, dict):
+            gpu_probe_status = node_body.get("gpu_probe_status")
+            if gpu_probe_status is None:
+                inv = node_body.get("inventory") or {}
+                if isinstance(inv, dict):
+                    gpu_probe_status = inv.get("gpu_probe_status")
+        steps.append(f"node gpu_probe_status={gpu_probe_status}")
+
+    result = {
+        "http_status": resp.status_code,
+        "probe": payload if isinstance(payload, dict) else {"raw": payload},
+        "latest": latest_body if isinstance(latest_body, dict) else {"raw": latest_body},
+        "evidence_id": latest_id,
+        "probe_evidence_id": evidence_id,
+        "node": node_body if isinstance(node_body, dict) else {},
+        "gpu_probe_status": gpu_probe_status,
+        "status": (
+            (payload.get("status") if isinstance(payload, dict) else None)
+            or (latest_body.get("status") if isinstance(latest_body, dict) else None)
+        ),
+    }
+    return result, steps
+
+
+def attach_host_probe_evidence(
+    base_url: str,
+    *,
+    secret: str,
+    node_id: str,
+    host_probe: dict[str, Any],
+    hotkey: str = PROVIDER_HK,
+    timeout: float = 60.0,
+) -> tuple[dict[str, Any], list[str]]:
+    """Attach ops host_probe.json evidence into product store (VAL-GPU-006 path).
+
+    Computes ``claimed_digest`` with product ``compute_attach_digest`` rules so
+    the API accept path is network-free testable offline via the pure helper.
+    Preferred live path is product re-probe; attach is a fallback when operators
+    already hold a passed host_probe.
+    """
+
+    from hypercluster.domain.gpu_probes import compute_attach_digest
+
+    base = base_url.rstrip("/")
+    steps: list[str] = []
+    # Build attach payload from host_probe (no private keys).
+    evidence = {
+        "id": host_probe.get("evidence_id"),
+        "status": host_probe.get("status"),
+        "mode": host_probe.get("mode") or "full",
+        "transport": host_probe.get("transport") or "real",
+        "claimed": {
+            "gpu_model": (host_probe.get("claimed") or {}).get("gpu_model")
+            or host_probe.get("claimed_model")
+            or "unknown",
+            "gpu_count": int(
+                (host_probe.get("claimed") or {}).get("gpu_count")
+                or host_probe.get("claimed_gpu_count")
+                or 1
+            ),
+        },
+        "measured": host_probe.get("measured") or {},
+        "checks": host_probe.get("checks") or [],
+        "raw_redacted": host_probe.get("raw_redacted") or {},
+        "key_fingerprint": host_probe.get("key_fingerprint"),
+        "failure_code": host_probe.get("failure_code"),
+        "digests": host_probe.get("digests") or {},
+    }
+    digest = compute_attach_digest(evidence)
+    body = {"evidence": evidence, "claimed_digest": digest}
+    steps.append(f"attach digest={digest[:24]}…")
+    with httpx.Client(timeout=timeout) as client:
+        resp = signed_request(
+            client,
+            "POST",
+            f"{base}/v1/nodes/{node_id}/evidence/gpu",
+            secret=secret,
+            hotkey=hotkey,
+            body=body,
+        )
+        payload = _safe_json(resp)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"attach external evidence HTTP {resp.status_code}: {payload}"
+            )
+        evidence_id = None
+        if isinstance(payload, dict):
+            evidence_id = payload.get("evidence_id") or payload.get("id")
+        steps.append(f"attached evidence_id={evidence_id}")
+        if not evidence_id:
+            raise RuntimeError("attach returned null evidence id")
+        latest = client.get(f"{base}/v1/nodes/{node_id}/probes/gpu/latest")
+        latest_body = _safe_json(latest)
+        steps.append(f"latest after attach HTTP {latest.status_code}")
+    return {
+        "http_status": resp.status_code,
+        "attach": payload if isinstance(payload, dict) else {"raw": payload},
+        "evidence_id": evidence_id,
+        "latest": latest_body if isinstance(latest_body, dict) else {},
+        "claimed_digest": digest,
+    }, steps

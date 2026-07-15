@@ -171,6 +171,12 @@ class HyperSettings(BaseSettings):
     # Env: HYPER_REQUIRE_LIVE_EVIDENCE, HYPER_REQUIRE_LIVE_EVIDENCE_MODE.
     require_live_evidence: bool = False
     require_live_evidence_mode: str = Field(default="soft")  # soft|hard|fail_closed
+    # M9 scoring integrity hooks (VAL-GPU-050..052).
+    # HYPER_SIM_GPU_PROBE_FAIL injects integrity zero without SSH (CI inject).
+    # HYPER_REQUIRE_GPU_EVIDENCE_FOR_LIVE zeros scores when live path lacks
+    # passed GpuHostEvidence; default false so pure sim remains green.
+    sim_gpu_probe_fail: bool = False
+    require_gpu_evidence_for_live: bool = False
 
     def _split_csv(self, raw: str) -> list[str]:
         return [part.strip() for part in (raw or "").split(",") if part.strip()]

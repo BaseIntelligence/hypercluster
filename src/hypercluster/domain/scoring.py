@@ -36,6 +36,10 @@ CHEAT_REASON_CODES: frozenset[str] = frozenset(
         "quote_sig_invalid",
         "integrity_fail",
         "allreduce_out_of_band",
+        # M9 GPU probe honesty (VAL-GPU-050/052) — map into same integrity zero
+        # path; never a fifth published scoring factor.
+        "gpu_probe_fail",
+        "gpu_probe_mismatch",
     }
 )
 

@@ -226,16 +226,71 @@ async def score_attempt_with_tee(
     integrity_fail: bool = False,
     details: dict[str, Any] | None = None,
 ) -> tuple[Any, TeeBonusDecision]:
-    """Persist score row for attempt using proof-driven tee_bonus rules."""
+    """Persist score row for attempt using proof-driven tee_bonus rules.
+
+    M9 GPU integrity (VAL-GPU-050..052) is applied here so every score path —
+    lifecycle launch seal, results post, timeout, cross scenarios — inherits
+    claim-vs-evidence zeros and ``HYPER_SIM_GPU_PROBE_FAIL`` inject without a
+    fifth published composite factor.
+    """
+
+    settings = hyper if hyper is not None else get_hyper_settings()
+    details_blob: dict[str, Any] = dict(details or {})
+
+    # ---- GPU probe integrity hooks (no 5th factor) -------------------------
+    from hypercluster.domain.gpu_scoring_integrity import (
+        apply_gpu_integrity,
+        evaluate_gpu_probe_integrity,
+        merge_gpu_codes,
+    )
+
+    gpu_kwargs = _gpu_integrity_inputs_from(details_blob, job=job)
+    gpu_decision = evaluate_gpu_probe_integrity(
+        claimed_gpu_model=gpu_kwargs.get("claimed_gpu_model"),
+        claimed_gpu_count=gpu_kwargs.get("claimed_gpu_count"),
+        evidence_status=gpu_kwargs.get("evidence_status"),
+        measured_gpu_model=gpu_kwargs.get("measured_gpu_model"),
+        measured_gpu_count=gpu_kwargs.get("measured_gpu_count"),
+        proof_tier=str(gpu_kwargs.get("proof_tier") or "sim"),
+        execution_backend=gpu_kwargs.get("execution_backend"),
+        requires_live_gpu_evidence=gpu_kwargs.get("requires_live_gpu_evidence"),
+        gpu_probe_status=gpu_kwargs.get("gpu_probe_status"),
+        hyper=settings,
+    )
+
+    correct_in = float(correctness if not integrity_fail else 0.0)
+    fabric_in = float(fabric_gate)
+    c_out, e_out, g_out, _t_out = apply_gpu_integrity(
+        correctness=correct_in,
+        efficiency=float(efficiency),
+        fabric_gate=fabric_in,
+        tee_bonus=1.0,  # tee computed below from proof; residual unused here
+        decision=gpu_decision,
+        hyper=settings,
+    )
+    existing_codes: list[str] = []
+    raw_codes = details_blob.get("integrity_codes") or details_blob.get("reason_codes")
+    if isinstance(raw_codes, list):
+        existing_codes = [str(c) for c in raw_codes]
+    integrity_codes = merge_gpu_codes(existing_codes, gpu_decision)
+    combined_integrity = bool(integrity_fail) or bool(gpu_decision.integrity_zero)
+    if gpu_decision.integrity_zero:
+        details_blob["gpu_integrity"] = {
+            "integrity_zero": True,
+            "reason": gpu_decision.reason,
+            "codes": list(gpu_decision.integrity_codes),
+        }
+    details_blob["integrity_codes"] = integrity_codes
+    details_blob["reason_codes"] = integrity_codes
+    # -----------------------------------------------------------------------
 
     proof = await ensure_attempt_proof(
         session,
         job=job,
         attempt=attempt,
-        integrity_fail=integrity_fail,
-        fabric_gate=fabric_gate,
+        integrity_fail=combined_integrity,
+        fabric_gate=g_out if combined_integrity else fabric_in,
     )
-    settings = hyper if hyper is not None else get_hyper_settings()
     is_valid_verdict: bool | None = None
     if proof.dstack_verdict_json:
         try:
@@ -253,7 +308,9 @@ async def score_attempt_with_tee(
         # Sim seal of a claimed TEE job is not attestation_fail by itself —
         # bonus simply stays 1.0 (VAL-TEE-005). Hard zero only on integrity_fail
         # or garbage-quote path (unverified claim capillary).
-        attestation_fail=integrity_fail,
+        # GPU inject / spoof also routes here as attestation_fail-equivalent
+        # integrity so composite is forced 0 (VAL-GPU-050/052).
+        attestation_fail=combined_integrity,
         hyper=settings,
         is_valid_verdict=is_valid_verdict,
     )
@@ -262,15 +319,85 @@ async def score_attempt_with_tee(
         attempt_id=attempt.id,
         hotkey=job.submitter_hotkey,
         role="demand",
-        correctness=correctness if not integrity_fail else 0.0,
-        efficiency=efficiency,
-        fabric_gate=fabric_gate,
+        correctness=c_out if not combined_integrity else 0.0,
+        efficiency=e_out,
+        fabric_gate=g_out if combined_integrity else float(g_out),
         proof=proof,
         tee_mode=job.tee_mode or "none",
         hyper=settings,
-        details=details,
+        details=details_blob,
     )
     return score, decision
+
+
+def _gpu_integrity_inputs_from(
+    details: dict[str, Any],
+    *,
+    job: Job,
+) -> dict[str, Any]:
+    """Extract optional GPU integrity inputs from score details + job resource."""
+
+    out: dict[str, Any] = {
+        "proof_tier": "sim",
+        "execution_backend": "sim_launcher",
+    }
+    # Prefer explicit caller-provided GPU claim/evidence in details.
+    for key in (
+        "claimed_gpu_model",
+        "claimed_gpu_count",
+        "evidence_status",
+        "measured_gpu_model",
+        "measured_gpu_count",
+        "proof_tier",
+        "execution_backend",
+        "requires_live_gpu_evidence",
+        "gpu_probe_status",
+    ):
+        if key in details and details[key] is not None:
+            out[key] = details[key]
+
+    gpu_block = details.get("gpu") or details.get("gpu_evidence") or {}
+    if isinstance(gpu_block, dict):
+        for src, dst in (
+            ("claimed_gpu_model", "claimed_gpu_model"),
+            ("claimed_model", "claimed_gpu_model"),
+            ("claimed_gpu_count", "claimed_gpu_count"),
+            ("claimed_count", "claimed_gpu_count"),
+            ("status", "evidence_status"),
+            ("evidence_status", "evidence_status"),
+            ("measured_gpu_model", "measured_gpu_model"),
+            ("measured_model", "measured_gpu_model"),
+            ("measured_gpu_count", "measured_gpu_count"),
+            ("measured_count", "measured_gpu_count"),
+            ("gpu_probe_status", "gpu_probe_status"),
+        ):
+            if src in gpu_block and dst not in out:
+                out[dst] = gpu_block[src]
+
+    # Resource JSON may carry claimed model/count for marketplace-bound jobs.
+    resource: dict[str, Any] = {}
+    raw = getattr(job, "resource_json", None)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                resource = parsed
+        except (TypeError, ValueError):
+            resource = {}
+    if resource:
+        if "claimed_gpu_model" not in out and resource.get("gpu_model"):
+            out["claimed_gpu_model"] = resource.get("gpu_model")
+        if "claimed_gpu_count" not in out and resource.get("gpus") is not None:
+            try:
+                out["claimed_gpu_count"] = int(resource["gpus"])
+            except (TypeError, ValueError):
+                pass
+
+    # Keep sim defaults so CI remains unprobed-green unless caller overrides
+    # (VAL-GPU-051).
+    out.setdefault("proof_tier", "sim")
+    out.setdefault("execution_backend", "sim_launcher")
+    return out
 
 
 __all__ = [

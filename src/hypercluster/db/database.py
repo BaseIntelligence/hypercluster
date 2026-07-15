@@ -1,0 +1,116 @@
+"""Async SQLAlchemy helpers for challenge-owned SQLite on `/data`."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import DeclarativeBase
+
+
+class Base(DeclarativeBase):
+    """Base class for challenge-owned SQLAlchemy models."""
+
+
+class Database:
+    """Async SQLAlchemy database wrapper with init/close lifespan hooks."""
+
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
+        self._initialized = False
+        self._closed = False
+        connect_args: dict[str, object] = {}
+        if database_url.startswith("sqlite"):
+            connect_args["check_same_thread"] = False
+            # Ensure parent directory exists for file-backed SQLite.
+            path = _sqlite_path_from_url(database_url)
+            if path is not None and path.parent and str(path.parent) not in {"", "."}:
+                path.parent.mkdir(parents=True, exist_ok=True)
+        self.engine: AsyncEngine = create_async_engine(
+            database_url,
+            connect_args=connect_args,
+        )
+        self._session_factory = async_sessionmaker(
+            self.engine,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+    @property
+    def initialized(self) -> bool:
+        return self._initialized
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def init(self) -> None:
+        """Create challenge-owned tables and mark initialized."""
+
+        async with self.engine.begin() as connection:
+            if self.engine.url.get_backend_name().startswith("sqlite"):
+                await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await connection.run_sync(Base.metadata.create_all)
+        self._initialized = True
+        self._closed = False
+
+    async def close(self) -> None:
+        """Dispose database connections."""
+
+        await self.engine.dispose()
+        self._closed = True
+
+    async def healthcheck(self) -> bool:
+        """Return True when a trivial query succeeds (readiness probe)."""
+
+        if not self._initialized or self._closed:
+            return False
+        try:
+            async with self.engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield an async SQLAlchemy session."""
+
+        async with self._session_factory() as session:
+            yield session
+
+    async def session_dependency(self) -> AsyncIterator[AsyncSession]:
+        """FastAPI dependency wrapper for request-scoped sessions."""
+
+        async with self.session() as session:
+            yield session
+
+
+def _sqlite_path_from_url(database_url: str) -> Path | None:
+    """Extract a filesystem path from a sqlite URL, if present."""
+
+    prefixes = (
+        "sqlite+aiosqlite:///",
+        "sqlite:///",
+    )
+    for prefix in prefixes:
+        if database_url.startswith(prefix):
+            raw = database_url[len(prefix) :]
+            # Absolute paths use four slashes form: sqlite+aiosqlite:////data/x
+            if raw.startswith("/"):
+                return Path(raw)
+            if raw in {":memory:", ""}:
+                return None
+            return Path(raw)
+    return None
+
+
+__all__ = ["Base", "Database"]

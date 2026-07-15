@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import datetime
@@ -20,6 +21,17 @@ from hypercluster.fabric.discovery import (
     validate_accepted_report,
 )
 from hypercluster.sim.inventory import seed_sim_inventory
+
+
+def _stable_node_index(node_id: str, *, modulo: int = 1000) -> int:
+    """Process-stable index from node_id (never use builtin hash — PYTHONHASHSEED).
+
+    Fields derived from this index (IB guids, collected_at offsets) enter
+    report_digest, so the derivation must be identical across process restarts.
+    """
+
+    digest = hashlib.sha256(node_id.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % modulo
 
 
 class FabricReportError(Exception):
@@ -226,8 +238,8 @@ def _sim_report_for_node(
     """Build a sim FabricReport bound to a real marketplace node id."""
 
     gpus = max(1, int(node.gpu_count or 1))
-    # Derive a stable per-node index from id for IB guids when possible.
-    index = abs(hash(node.id)) % 1000
+    # Stable per-node index for IB guids / collected_at (no builtin hash).
+    index = _stable_node_index(node.id)
     matrix = synthetic_nvlink_topo_matrix(gpus)
     if topo_variant != "pack":
         matrix = matrix + f"#variant={topo_variant}:seed={seed}:node={node.id}\n"
@@ -343,6 +355,8 @@ async def fabric_scan_node(
 
 __all__ = [
     "FabricReportError",
+    "_sim_report_for_node",
+    "_stable_node_index",
     "fabric_scan_node",
     "get_latest_fabric_report",
     "list_fabric_reports",

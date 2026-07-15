@@ -195,6 +195,77 @@ def test_sim_seed_produces_ib_edges_graph() -> None:
 # ----- VAL-FAB-018 (domain-level, no HTTP required) --------------------------
 
 
+def test_sim_report_digest_stable_independent_of_builtin_hash() -> None:
+    """VAL-FAB-018: report_digest must not depend on PYTHONHASHSEED / builtin hash.
+
+    Monkeypatches builtins.hash to return different salted values on successive
+    calls, hard-failing if _sim_report_for_node (or equivalent path) still routes
+    node.id through process-randomized hash for digest inputs.
+    """
+
+    from hypercluster.db.models import Node
+    from hypercluster.domain.fabric_reports import (
+        _sim_report_for_node,
+        _stable_node_index,
+    )
+
+    node_id = "stable-uuid-for-digest-test-aaaa-bbbb-cccc-dddddddddddd"
+    node = Node(
+        id=node_id,
+        provider_id="provider-stable",
+        gpu_model="H100",
+        gpu_count=2,
+        ssh_endpoint="10.0.0.9:22",
+        status="available",
+        inventory_json="{}",
+        location_hint=None,
+        has_ib=1,
+        ib_rate_gbps=200.0,
+    )
+
+    # Baseline digests with real builtin hash.
+    first = _sim_report_for_node(node, seed=42, topo_variant="pack")
+    second = _sim_report_for_node(node, seed=42, topo_variant="pack")
+    assert first.report_digest == second.report_digest
+    assert first.report_digest.startswith("sha256:")
+
+    calls: list[object] = []
+    real_hash = hash
+
+    def _adversarial_hash(obj: object) -> int:
+        # Salt depends on call count so each evaluation of hash(node.id) differs
+        # within and across builds — still passes if we never use builtin hash.
+        calls.append(obj)
+        return real_hash(obj) ^ (0x5A5A5A5A * (len(calls) + 1))
+
+    # Force highly unstable hash() for the process while recomputing.
+    import builtins
+
+    builtins.hash = _adversarial_hash  # type: ignore[assignment]
+    try:
+        third = _sim_report_for_node(node, seed=42, topo_variant="pack")
+        fourth = _sim_report_for_node(node, seed=42, topo_variant="pack")
+    finally:
+        builtins.hash = real_hash  # type: ignore[assignment]
+
+    assert third.report_digest == first.report_digest
+    assert fourth.report_digest == first.report_digest
+    # Adversarial hash was installed; code must not have relied on it for
+    # digest-bearing fields. Prefer zero hash() on node_id; allow incidental
+    # hash use only if digests still match (assertion above is the gate).
+    assert _stable_node_index(node_id) == int(
+        hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:8], 16
+    ) % 1000
+    # Tile: IB guid/index fields match stable derivation (not randomized).
+    expected_index = _stable_node_index(node_id)
+    assert first.ib_devices
+    assert first.ib_devices[0].guid == f"0x{(expected_index % 64):04x}0000sim"
+
+    # Counterpart: topo change still alters digest (identity is for same inventory).
+    changed = _sim_report_for_node(node, seed=42, topo_variant="spread")
+    assert changed.report_digest != first.report_digest
+
+
 @pytest.mark.asyncio
 async def test_fabric_scan_accepts_report_and_persists_digest(
     settings_factory, tmp_path

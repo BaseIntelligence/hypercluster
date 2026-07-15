@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from hypercluster.no_verda import VERDA_HOST_MARKERS
 from hypercluster.sim.identity import IdentityReport, probe_identity_gates
 from hypercluster.sim.scenarios import ScenarioResult, _fail, _signed_request
 
@@ -30,12 +31,8 @@ ALLOWED_IMAGE = (
 )
 
 # Host substrings that must never appear in outbound requests during pure sim.
-_VERDA_HOST_MARKERS = (
-    "verda.com",
-    "api.verda",
-    "verda.cloud",
-    "verda.io",
-)
+# Shared with hypercluster.no_verda (VAL-LIVE-001/011 + VAL-CROSS-013).
+_VERDA_HOST_MARKERS = VERDA_HOST_MARKERS
 
 
 @dataclass(slots=True)

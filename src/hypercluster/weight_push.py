@@ -33,6 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hypercluster.db.models import WeightSnapshot, isoformat_utc, utc_now
 from hypercluster.domain.aggregation import compute_raw_weights, sanitize_weights_map
+from hypercluster.no_verda import (
+    VerdaForbiddenError,
+    assert_challenge_outbound_allowed,
+)
 from hypercluster.settings import HyperSettings, get_hyper_settings
 
 logger = logging.getLogger(__name__)
@@ -438,6 +442,27 @@ async def mark_snapshot_status(
     return snapshot
 
 
+def resolve_master_base_url(hyper: HyperSettings | None = None) -> str | None:
+    """Return configured master base URL after Verda outbound allowlist check.
+
+    VAL-LIVE-011: challenge weight push must never target api.verda.com even if
+    ``HYPER_MASTER_BASE_URL`` is mis-set to a commercial cloud control plane.
+    """
+
+    product = hyper if hyper is not None else get_hyper_settings()
+    master = getattr(product, "master_base_url", None)
+    if not master:
+        return None
+    url = str(master).strip()
+    if not url:
+        return None
+    try:
+        assert_challenge_outbound_allowed(url)
+    except VerdaForbiddenError as exc:
+        raise WeightPushValidationError(exc.code, exc.message) from exc
+    return url.rstrip("/")
+
+
 class WeightPushClient:
     """Build, sign, and POST raw weights; persist wait/ack on weight_snapshots."""
 
@@ -454,6 +479,8 @@ class WeightPushClient:
         now_fn: Callable[[], datetime] | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        # Fail closed on Verda (or other forbidden) control-plane URLs.
+        assert_challenge_outbound_allowed(master_base_url)
         self.database = database
         self.challenge_slug = challenge_slug
         self.master_base_url = master_base_url.rstrip("/")
@@ -822,7 +849,13 @@ def maybe_build_push_client(
     product = hyper if hyper is not None else get_hyper_settings()
     if not bool(getattr(product, "weight_push_enabled", True)):
         return None
-    master = getattr(product, "master_base_url", None)
+    try:
+        master = resolve_master_base_url(product)
+    except WeightPushValidationError:
+        # Misconfiguration toward Verda (or other forbidden hosts) must not
+        # partially construct a client that could dial those endpoints.
+        logger.error("weight push disabled: master base URL fails outbound allowlist")
+        return None
     if not master:
         return None
     token = resolve_shared_token(settings)
@@ -865,6 +898,7 @@ __all__ = [
     "mark_snapshot_status",
     "maybe_build_push_client",
     "next_revision",
+    "resolve_master_base_url",
     "resolve_shared_token",
     "run_weight_push_loop",
     "sign_challenge_push_request",

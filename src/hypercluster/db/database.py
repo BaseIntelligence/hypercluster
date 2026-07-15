@@ -57,6 +57,9 @@ class Database:
     async def init(self) -> None:
         """Create challenge-owned tables and mark initialized."""
 
+        # Ensure model modules register metadata before create_all.
+        import hypercluster.db.models  # noqa: F401
+
         async with self.engine.begin() as connection:
             if self.engine.url.get_backend_name().startswith("sqlite"):
                 await connection.exec_driver_sql("PRAGMA journal_mode=WAL")

@@ -55,6 +55,12 @@ class HyperSettings(BaseSettings):
     weight_push_interval_s: float = Field(default=120.0, ge=1.0)
     score_window_attempts: int = Field(default=50, ge=1)
     efficiency_floor: float = Field(default=0.0, ge=0.0)
+    # Signed miner auth (marketplace write routes). Insecure HMAC mode is for
+    # local/tests (matches peer's allow_insecure_signatures pattern); set false
+    # in production so only substrate hotkey signatures verify.
+    allow_insecure_signatures: bool = True
+    signature_ttl_seconds: int = Field(default=300, ge=30)
+    node_liveness_seconds: int = Field(default=120, ge=5)
 
 
 @lru_cache(maxsize=1)

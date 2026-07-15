@@ -7,6 +7,12 @@ from hypercluster.sim.cross_happy_path import (
     capture_httpx_egress,
     run_cross_happy_path,
 )
+from hypercluster.sim.cross_multinode_fabric_tee import (
+    run_cross_multinode_fabric_fail,
+    run_cross_multinode_fabric_tee,
+    run_cross_multinode_success,
+    run_cross_tee_offline_bonus,
+)
 from hypercluster.sim.doctor import BackendChecks, DoctorReport, check_sim_backends, run_doctor
 from hypercluster.sim.identity import IdentityReport, probe_identity_gates
 from hypercluster.sim.inventory import (
@@ -21,6 +27,7 @@ from hypercluster.sim.orchestration import (
     DEFAULT_SCENARIO_ORDER,
     SuiteResult,
     run_cross_happy_path_bundle,
+    run_cross_multinode_fabric_tee_bundle,
     run_named_scenarios,
     run_scenario_suite,
 )
@@ -33,6 +40,7 @@ from hypercluster.sim.ports import (
 )
 from hypercluster.sim.scenarios import (
     CROSS_HAPPY_PATH,
+    CROSS_MULTINODE,
     KNOWN_SCENARIOS,
     ScenarioResult,
     run_marketplace_scenario,
@@ -51,6 +59,7 @@ from hypercluster.sim.seed import (
 
 __all__ = [
     "CROSS_HAPPY_PATH",
+    "CROSS_MULTINODE",
     "DEFAULT_BAREMETAL_PORT",
     "DEFAULT_SCENARIO_ORDER",
     "DEFAULT_SIM_SEED",
@@ -78,6 +87,11 @@ __all__ = [
     "resolve_sim_seed",
     "run_cross_happy_path",
     "run_cross_happy_path_bundle",
+    "run_cross_multinode_fabric_fail",
+    "run_cross_multinode_fabric_tee",
+    "run_cross_multinode_fabric_tee_bundle",
+    "run_cross_multinode_success",
+    "run_cross_tee_offline_bonus",
     "run_doctor",
     "run_marketplace_scenario",
     "run_named_scenarios",

@@ -224,9 +224,9 @@ async def score_attempt_with_tee(
     fabric_gate: float = 1.0,
     hyper: HyperSettings | None = None,
     integrity_fail: bool = False,
+    details: dict[str, Any] | None = None,
 ) -> tuple[Any, TeeBonusDecision]:
     """Persist score row for attempt using proof-driven tee_bonus rules."""
-
 
     proof = await ensure_attempt_proof(
         session,
@@ -268,6 +268,7 @@ async def score_attempt_with_tee(
         proof=proof,
         tee_mode=job.tee_mode or "none",
         hyper=settings,
+        details=details,
     )
     return score, decision
 

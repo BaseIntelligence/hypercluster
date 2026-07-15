@@ -976,6 +976,16 @@ async def _collect_success(
             efficiency=1.0,
             fabric_gate=1.0,
             hyper=hyper,
+            details={
+                "graph_digest": graph_digest,
+                "fabric_artifact_digest": launch_result.fabric_artifact_digest,
+                "fabric_report_digest": attempt.fabric_report_digest
+                or fab.get("report_digest"),
+                "planner_version": planner_version,
+                "launcher_version": launch_result.launcher_version,
+                "rankmap_len": len(rankmap),
+                "sealed_early": True,
+            },
         )
         return
 
@@ -1053,9 +1063,22 @@ async def _collect_success(
         )
 
     # Persist four-factor score; tee_bonus locked to 1.0 for sim/ordinary.
+    # VAL-CROSS-021: score details carry planner/launcher/report digests for chain identity.
     efficiency = 1.0
     if launch_result.metrics is not None:
         efficiency = float(getattr(launch_result.metrics, "efficiency", 1.0) or 1.0)
+    chain_details: dict[str, Any] = {
+        "graph_digest": graph_digest,
+        "fabric_artifact_digest": launch_result.fabric_artifact_digest,
+        "fabric_report_digest": fab.get("report_digest"),
+        "planner_version": planner_version,
+        "launcher_version": launch_result.launcher_version,
+        "rankmap_len": len(rankmap),
+        "failure_code": launch_result.failure_code,
+        "integrity_codes": list(
+            (launch_result.score_factors or {}).get("reason_codes") or []
+        ),
+    }
     await score_attempt_with_tee(
         session,
         job=job,
@@ -1065,6 +1088,7 @@ async def _collect_success(
         fabric_gate=float(launch_result.fabric_gate),
         hyper=hyper,
         integrity_fail=bool(launch_result.integrity_fail),
+        details=chain_details,
     )
 
     report = await get_fabric_report(session, job.id)

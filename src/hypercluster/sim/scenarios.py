@@ -34,11 +34,12 @@ NCCL = "nccl"
 TEE_OFFLINE = "tee-offline"
 WEIGHTS = "weights"
 CROSS_HAPPY_PATH = "cross-happy-path"
+CROSS_MULTINODE = "cross-multinode-fabric-tee"
 
 # Architecture §12.3 names remain the five canonical suite scenarios.
 KNOWN_SCENARIOS = (SMOKE, MARKETPLACE, NCCL, TEE_OFFLINE, WEIGHTS)
 # Extended names accepted by run_scenario (cross e2e; not part of suite order).
-EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (CROSS_HAPPY_PATH,)
+EXTENDED_SCENARIOS = KNOWN_SCENARIOS + (CROSS_HAPPY_PATH, CROSS_MULTINODE)
 
 # Deterministic local-sim hotkeys (not real ss58; HMAC insecure mode).
 _SCENARIO_PROVIDER_HK = "sim-mkt-provider-hotkey-aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1333,6 +1334,23 @@ def run_scenario(
             timeout=max(timeout, 45.0),
             shared_token=shared_token,
         )
+    if key in {
+        CROSS_MULTINODE,
+        "cross_multinode_fabric_tee",
+        "cross-multinode",
+        "multinode-fabric-tee",
+    }:
+        from hypercluster.sim.cross_multinode_fabric_tee import (
+            run_cross_multinode_fabric_tee,
+        )
+
+        return run_cross_multinode_fabric_tee(
+            base_url,
+            timeout=max(timeout, 60.0),
+            shared_token=shared_token,
+            include_fail_inject=False,
+            include_tee_bonus=True,
+        )
     return ScenarioResult(
         name=key,
         ok=False,
@@ -1347,6 +1365,7 @@ def run_scenario(
 
 __all__ = [
     "CROSS_HAPPY_PATH",
+    "CROSS_MULTINODE",
     "EXTENDED_SCENARIOS",
     "KNOWN_SCENARIOS",
     "MARKETPLACE",

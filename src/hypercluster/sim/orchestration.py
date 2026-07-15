@@ -219,6 +219,35 @@ def run_cross_happy_path_bundle(
     )
 
 
+def run_cross_multinode_fabric_tee_bundle(
+    base_url: str,
+    *,
+    timeout: float = 60.0,
+    shared_token: str | None = None,
+    include_fail_inject: bool = False,
+    include_tee_bonus: bool = True,
+    **kwargs: Any,
+) -> ScenarioResult:
+    """VAL-CROSS-004/005/006/021 multi-node fabric + TEE offline bonus.
+
+    Fail inject requires the API process to start with HYPER_SIM_ETH_FALLBACK=1.
+    Default CLI bundle runs success + TEE twin on a clean fabric path.
+    """
+
+    from hypercluster.sim.cross_multinode_fabric_tee import (
+        run_cross_multinode_fabric_tee,
+    )
+
+    _ = kwargs
+    return run_cross_multinode_fabric_tee(
+        base_url,
+        timeout=timeout,
+        shared_token=shared_token,
+        include_fail_inject=include_fail_inject,
+        include_tee_bonus=include_tee_bonus,
+    )
+
+
 __all__ = [
     "DEFAULT_SCENARIO_ORDER",
     "FABRIC_SCENARIOS",
@@ -226,6 +255,7 @@ __all__ = [
     "SuiteResult",
     "normalize_scenario_names",
     "run_cross_happy_path_bundle",
+    "run_cross_multinode_fabric_tee_bundle",
     "run_fabric_bundle",
     "run_happy_path_bundle",
     "run_named_scenarios",

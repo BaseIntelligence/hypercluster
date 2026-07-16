@@ -109,8 +109,7 @@ def evaluate_claim_vs_evidence(
             if int(claimed_gpu_count) != int(measured_gpu_count):
                 mismatch = True
                 reason_parts.append(
-                    f"count_mismatch claimed={claimed_gpu_count} "
-                    f"measured={measured_gpu_count}"
+                    f"count_mismatch claimed={claimed_gpu_count} measured={measured_gpu_count}"
                 )
         except (TypeError, ValueError):
             mismatch = True

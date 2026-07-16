@@ -132,9 +132,7 @@ def make_offline_envelope(
     if report_data is None:
         if not (job_id and image_digest and nonce):
             raise ValueError("report_data or (job_id, image_digest, nonce) required")
-        report_data = build_report_data(
-            job_id=job_id, image_digest=image_digest, nonce=nonce
-        )
+        report_data = build_report_data(job_id=job_id, image_digest=image_digest, nonce=nonce)
     if len(report_data) != REPORT_DATA_SIZE:
         # Still package — verify will fail layout (used for negative fixtures).
         pass

@@ -224,9 +224,7 @@ def aggregate_score_rows(
             role_sums[hotkey][role] += 0.0
             continue
         flagged = is_self_deal_score(row)
-        mass = apply_self_deal_damping(
-            raw, self_deal=flagged, damping=self_deal_damping
-        )
+        mass = apply_self_deal_damping(raw, self_deal=flagged, damping=self_deal_damping)
         role_sums[hotkey][role] += mass
         counts[hotkey] += 1
         if flagged:
@@ -279,9 +277,7 @@ async def compute_raw_weights(
 ) -> dict[str, float]:
     """Raw hotkey weights for get_weights / weight-preview (VAL-SCORE-009/010/011)."""
 
-    aggregates = await compute_hotkey_aggregates(
-        session, hyper=hyper, window=window
-    )
+    aggregates = await compute_hotkey_aggregates(session, hyper=hyper, window=window)
     return aggregates_to_weights(aggregates)
 
 
@@ -298,9 +294,7 @@ async def build_leaderboard(
     registry or non-scored hotkeys.
     """
 
-    aggregates = await compute_hotkey_aggregates(
-        session, hyper=hyper, window=window
-    )
+    aggregates = await compute_hotkey_aggregates(session, hyper=hyper, window=window)
     ordered = sorted(
         aggregates.values(),
         key=lambda a: (-a.aggregate, a.hotkey),

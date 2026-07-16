@@ -33,9 +33,7 @@ from hypercluster.sim.scenarios import CROSS_MULTINODE as SCENARIO_NAME
 from hypercluster.sim.scenarios import run_scenario
 
 TOKEN = "test-challenge-shared-token"
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 runner = CliRunner()
 
 
@@ -268,9 +266,7 @@ def test_cross_multinode_digest_chain_identity(
     if isinstance(extra, dict):
         assert extra.get("graph_digest") == graph
         assert extra.get("fabric_artifact_digest") == metrics.get("fabric_artifact_digest")
-        assert extra.get("fabric_report_digest") == attempt.json().get(
-            "fabric_report_digest"
-        )
+        assert extra.get("fabric_report_digest") == attempt.json().get("fabric_report_digest")
 
 
 # ----- VAL-CROSS-005 fabric_gate fail inject ----------------------------------

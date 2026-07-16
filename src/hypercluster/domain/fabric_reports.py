@@ -88,9 +88,7 @@ def report_to_public(report: FabricReport | FabricReportRow) -> dict[str, Any]:
     return _row_to_report(report).to_public()
 
 
-async def get_latest_fabric_report(
-    session: AsyncSession, node_id: str
-) -> FabricReportRow | None:
+async def get_latest_fabric_report(session: AsyncSession, node_id: str) -> FabricReportRow | None:
     result = await session.execute(
         select(FabricReportRow)
         .where(FabricReportRow.node_id == node_id)
@@ -99,9 +97,7 @@ async def get_latest_fabric_report(
     return result.scalars().first()
 
 
-async def list_fabric_reports(
-    session: AsyncSession, node_id: str
-) -> list[FabricReportRow]:
+async def list_fabric_reports(session: AsyncSession, node_id: str) -> list[FabricReportRow]:
     result = await session.execute(
         select(FabricReportRow)
         .where(FabricReportRow.node_id == node_id)

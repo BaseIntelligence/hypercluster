@@ -227,8 +227,7 @@ def decision_from_proof(
                     is_valid = bool(verdict.get("is_valid"))
                 codes = verdict.get("reason_codes") or []
                 if isinstance(codes, list) and any(
-                    c in {"attestation_fail", "quote_invalid", "quote_sig_invalid"}
-                    for c in codes
+                    c in {"attestation_fail", "quote_invalid", "quote_sig_invalid"} for c in codes
                 ):
                     # Hard fail when garbage + claim path.
                     if is_valid is False and (tee_mode or "none") != "none":
@@ -310,9 +309,7 @@ async def persist_score_for_attempt(
         "tee_decision": {
             "tee_bonus": float(breakdown.tee_bonus),
             "applied_tier": decision.applied_tier,
-            "reason_codes": list(
-                dict.fromkeys([*decision.reason_codes, *breakdown.reason_codes])
-            ),
+            "reason_codes": list(dict.fromkeys([*decision.reason_codes, *breakdown.reason_codes])),
             "integrity_zero": breakdown.integrity_zero,
         },
         "factors": breakdown.factors_dict(),

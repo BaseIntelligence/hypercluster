@@ -51,9 +51,7 @@ def _job(*, hotkey: str, job_id: str | None = None) -> Job:
         id=job_id or str(uuid.uuid4()),
         submitter_hotkey=hotkey,
         status="succeeded",
-        image_digest=(
-            "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-        ),
+        image_digest=("sha256:sim000000000000000000000000000000000000000000000000000000000001"),
         entrypoint_json=json.dumps(["python", "-m", "train"]),
         world_size=1,
         nnodes=1,
@@ -115,10 +113,7 @@ def test_claim_model_mismatch_vs_passed_evidence_is_integrity_zero() -> None:
     assert public["composite"] == pytest.approx(0.0)
     # Product identity still holds for factors still published.
     assert public["composite"] == pytest.approx(
-        public["correctness"]
-        * public["efficiency"]
-        * public["fabric_gate"]
-        * public["tee_bonus"]
+        public["correctness"] * public["efficiency"] * public["fabric_gate"] * public["tee_bonus"]
     )
 
 
@@ -389,9 +384,10 @@ def test_four_factor_formula_signature_unchanged_with_gpu_codes() -> None:
     assert breakdown.composite == pytest.approx(0.0)
     public = score_breakdown_to_public(breakdown)
     assert "gpu_gate" not in public
-    assert len(
-        [k for k in public if k in {"correctness", "efficiency", "fabric_gate", "tee_bonus"}]
-    ) == 4
+    assert (
+        len([k for k in public if k in {"correctness", "efficiency", "fabric_gate", "tee_bonus"}])
+        == 4
+    )
 
 
 def test_gpu_integrity_decision_dataclass_fields() -> None:
@@ -461,7 +457,7 @@ async def test_score_attempt_with_tee_applies_claim_spoof(
             codes |= set((details.get("tee_decision") or {}).get("reason_codes") or [])
             assert "inventory_spoof" in codes or "gpu_probe_mismatch" in codes
             # Formula fence: no gpu_gate published factor.
-            factors = (details.get("factors") or {})
+            factors = details.get("factors") or {}
             assert "gpu_gate" not in factors
             assert set(factors.keys()) >= {
                 "correctness",
@@ -473,9 +469,7 @@ async def test_score_attempt_with_tee_applies_claim_spoof(
 
 
 @pytest.mark.asyncio
-async def test_score_attempt_with_tee_sim_unaffected(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_score_attempt_with_tee_sim_unaffected(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-GPU-051: pure sim score path stays positive without GPU evidence."""
 
     from hypercluster.app import create_app

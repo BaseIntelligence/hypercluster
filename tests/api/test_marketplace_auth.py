@@ -138,11 +138,16 @@ async def test_write_routes_reject_missing_signature_headers(
     detail = response.json().get("detail")
     # Prefer structured code when present.
     if isinstance(detail, dict):
-        assert detail.get("code") in {
-            "missing_auth_headers",
-            "invalid_signature",
-            "missing_hotkey",
-        } or "auth" in str(detail).lower() or "sign" in str(detail).lower()
+        assert (
+            detail.get("code")
+            in {
+                "missing_auth_headers",
+                "invalid_signature",
+                "missing_hotkey",
+            }
+            or "auth" in str(detail).lower()
+            or "sign" in str(detail).lower()
+        )
 
 
 @pytest.mark.asyncio

@@ -217,9 +217,7 @@ def compute_four_factor(
     e_stored = eff_res.stored
     e_product = eff_res.for_product
 
-    codes, forced_zero = _normalize_integrity_codes(
-        integrity_codes, integrity_zero=integrity_zero
-    )
+    codes, forced_zero = _normalize_integrity_codes(integrity_codes, integrity_zero=integrity_zero)
     if eff_res.below_floor:
         codes = list(dict.fromkeys([*codes, "below_efficiency_floor"]))
 
@@ -309,10 +307,7 @@ async def list_scores_for_hotkey(
 
     lim = max(1, min(int(limit), 1000))
     result = await session.execute(
-        select(Score)
-        .where(Score.hotkey == hotkey)
-        .order_by(Score.created_at.desc())
-        .limit(lim)
+        select(Score).where(Score.hotkey == hotkey).order_by(Score.created_at.desc()).limit(lim)
     )
     return list(result.scalars().all())
 

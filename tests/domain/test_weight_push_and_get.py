@@ -68,9 +68,7 @@ def _job(*, hotkey: str, job_id: str | None = None) -> Job:
         id=job_id or str(uuid.uuid4()),
         submitter_hotkey=hotkey,
         status="succeeded",
-        image_digest=(
-            "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-        ),
+        image_digest=("sha256:sim000000000000000000000000000000000000000000000000000000000001"),
         entrypoint_json=json.dumps(["python", "-m", "train"]),
         world_size=1,
         nnodes=1,
@@ -325,9 +323,7 @@ async def test_push_to_mock_master_acks_and_idempotent(
             assert r1.payload_digest
 
             async with db.session() as session:
-                row = await get_snapshot_by_epoch_revision(
-                    session, epoch=42, revision=r1.revision
-                )
+                row = await get_snapshot_by_epoch_revision(session, epoch=42, revision=r1.revision)
                 assert row is not None
                 assert row.push_status == "acked"
                 assert row.master_snapshot_id == r1.snapshot_id
@@ -438,9 +434,7 @@ async def test_get_weights_and_preview_same_map_family(
         async with db.session() as session:
             await _seed_score(session, hotkey=HOTKEY_A, efficiency=12.0, hyper=hyper)
             await _seed_score(session, hotkey=HOTKEY_B, efficiency=3.0, hyper=hyper)
-            await create_pending_snapshot(
-                session, challenge_slug=SLUG, epoch=5, hyper=hyper
-            )
+            await create_pending_snapshot(session, challenge_slug=SLUG, epoch=5, hyper=hyper)
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -451,9 +445,7 @@ async def test_get_weights_and_preview_same_map_family(
             assert all(math.isfinite(float(v)) and float(v) >= 0 for v in pmap.values())
             assert pmap[HOTKEY_A] > pmap[HOTKEY_B]
 
-            internal = await client.get(
-                "/internal/v1/get_weights", headers=internal_headers
-            )
+            internal = await client.get("/internal/v1/get_weights", headers=internal_headers)
             assert internal.status_code == 200, internal.text
             imap = internal.json()["weights"]
             # Same key/value family within revision.
@@ -466,9 +458,7 @@ async def test_get_weights_and_preview_same_map_family(
 
 
 @pytest.mark.asyncio
-async def test_push_worker_does_not_block_health(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_push_worker_does_not_block_health(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-SCORE-023: /health stays 200 while push machinery is present."""
 
     from hypercluster.app import create_app
@@ -541,9 +531,7 @@ def test_cli_weights_preview_and_push_help() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cli_weights_preview_against_live_api(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_cli_weights_preview_against_live_api(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-SCORE-020 preview path returns finite map (via ASGI + CLI JSON shape)."""
 
     from hypercluster.app import create_app

@@ -66,9 +66,11 @@ def reject_body_private_key_fields(body: dict[str, Any] | None) -> None:
         return
     for key, value in body.items():
         lower = str(key).lower().replace("-", "_")
-        if lower in _BODY_FORBIDDEN or (
-            "private" in lower and "key" in lower
-        ) or lower.endswith("_pem"):
+        if (
+            lower in _BODY_FORBIDDEN
+            or ("private" in lower and "key" in lower)
+            or lower.endswith("_pem")
+        ):
             raise KeyMaterialError(
                 "private_key_not_allowed",
                 f"request field {key!r} is not allowed; use key_ref only",

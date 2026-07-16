@@ -335,8 +335,7 @@ def place_ranks(request: PlacementRequest) -> PlacementResult:
             return PlacementResult(
                 ok=False,
                 planner_version=PLANNER_VERSION,
-                graph_digest=DIGEST_PREFIX
-                + hashlib.sha256(b"fabric-mode-reject").hexdigest(),
+                graph_digest=DIGEST_PREFIX + hashlib.sha256(b"fabric-mode-reject").hexdigest(),
                 policy=policy,
                 fabric=fabric,
                 reason=mode_eval.reason or "fabric mode rejected",
@@ -406,8 +405,7 @@ def place_ranks(request: PlacementRequest) -> PlacementResult:
         return PlacementResult(
             ok=False,
             planner_version=PLANNER_VERSION,
-            graph_digest=DIGEST_PREFIX
-            + hashlib.sha256(b"capacity-insufficient").hexdigest(),
+            graph_digest=DIGEST_PREFIX + hashlib.sha256(b"capacity-insufficient").hexdigest(),
             policy=policy,
             fabric=fabric,
             reason="insufficient GPU capacity for world_size under policy",
@@ -440,8 +438,7 @@ def place_ranks(request: PlacementRequest) -> PlacementResult:
             return PlacementResult(
                 ok=False,
                 planner_version=PLANNER_VERSION,
-                graph_digest=DIGEST_PREFIX
-                + hashlib.sha256(b"local-rank-hole").hexdigest(),
+                graph_digest=DIGEST_PREFIX + hashlib.sha256(b"local-rank-hole").hexdigest(),
                 policy=policy,
                 fabric=fabric,
                 reason=f"local ranks not consecutive on {nid}",

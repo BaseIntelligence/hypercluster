@@ -195,9 +195,7 @@ def run_smoke_scenario(
                             steps=steps,
                             identity=report,
                         )
-                steps.append(
-                    f"weights burn-safe ok (count={len(wmap)}; empty-or-finite≥0)"
-                )
+                steps.append(f"weights burn-safe ok (count={len(wmap)}; empty-or-finite≥0)")
             else:
                 # Missing preview endpoint is acceptable on empty install when
                 # identity is green; burn-safe means no crash / no NaN invent.
@@ -249,10 +247,7 @@ def run_marketplace_scenario(
             name=MARKETPLACE,
             ok=False,
             base_url=normalized,
-            message=(
-                "marketplace failed: identity not green "
-                f"({'; '.join(report.errors)})"
-            ),
+            message=(f"marketplace failed: identity not green ({'; '.join(report.errors)})"),
             steps=steps,
             identity=report,
         )
@@ -435,8 +430,7 @@ def run_marketplace_scenario(
                     report,
                 )
             steps.append(
-                f"rent ok lease_id={lease_id} status={lease_status} "
-                f"pod_id={pod.get('id')}"
+                f"rent ok lease_id={lease_id} status={lease_status} pod_id={pod.get('id')}"
             )
 
             # 5) Double-rent reject
@@ -461,8 +455,7 @@ def run_marketplace_scenario(
                     report,
                 )
             steps.append(
-                f"double-rent rejected HTTP {double.status_code} "
-                f"code={_detail_code(double.json())}"
+                f"double-rent rejected HTTP {double.status_code} code={_detail_code(double.json())}"
             )
 
             # 6) Terminate
@@ -500,8 +493,7 @@ def run_marketplace_scenario(
                         report,
                     )
             steps.append(
-                f"terminate ok lease_id={lease_id} "
-                f"status={term_lease.get('status', 'terminal')}"
+                f"terminate ok lease_id={lease_id} status={term_lease.get('status', 'terminal')}"
             )
 
             # 7) Post-terminate list sanity (active rent no longer listed for climb)
@@ -530,9 +522,7 @@ def run_marketplace_scenario(
         name=MARKETPLACE,
         ok=True,
         base_url=normalized,
-        message=(
-            "marketplace passed: offer/list/rent/double-rent-reject/terminate"
-        ),
+        message=("marketplace passed: offer/list/rent/double-rent-reject/terminate"),
         steps=steps,
         identity=report,
     )
@@ -578,8 +568,7 @@ def _tee_fixture_root() -> Path:
         if p.is_dir():
             return p
     raise FileNotFoundError(
-        "tee fixtures not found under tests/fixtures/tee "
-        f"(searched {[str(c) for c in candidates]})"
+        f"tee fixtures not found under tests/fixtures/tee (searched {[str(c) for c in candidates]})"
     )
 
 
@@ -683,25 +672,19 @@ def run_tee_offline_scenario(
         positive,
         policy=policy,
         job_id="job-offline-positive-0001",
-        image_digest=(
-            "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-        ),
+        image_digest=("sha256:sim000000000000000000000000000000000000000000000000000000000001"),
         nonce="n0nce-posit1ve-aaaa-bbbb-cccc-111111111111",
     )
     if not positive_result.is_valid:
         return _fail(
             TEE_OFFLINE,
             normalized,
-            (
-                "positive fixture failed offline verify: "
-                f"reasons={positive_result.reason_codes}"
-            ),
+            (f"positive fixture failed offline verify: reasons={positive_result.reason_codes}"),
             steps,
             None,
         )
     steps.append(
-        f"positive offline_fixture is_valid=true "
-        f"compose_hash={positive_result.compose_hash}"
+        f"positive offline_fixture is_valid=true compose_hash={positive_result.compose_hash}"
     )
 
     # Bonus application for verified offline TDX (VAL-TEE-006 / scenario wiring).
@@ -725,9 +708,7 @@ def run_tee_offline_scenario(
 
     # --- Valve C: mutated compose_hash rejects (no bonus)
     steps.append("mutated compose_hash reject")
-    bad_compose = (
-        "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-    )
+    bad_compose = "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
     job_id = "job-offline-mutated-compose"
     image = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
     nonce = "n0nce-mutated-compose-aaaa-bbbb-cccc-3333"
@@ -775,9 +756,7 @@ def run_tee_offline_scenario(
             steps,
             None,
         )
-    steps.append(
-        f"mutated compose rejected reasons={list(bad_result.reason_codes)}"
-    )
+    steps.append(f"mutated compose rejected reasons={list(bad_result.reason_codes)}")
 
     # Unverified claim → no inflated bonus.
     no_bonus = compute_tee_bonus(
@@ -812,7 +791,6 @@ def run_tee_offline_scenario(
     )
 
 
-
 def run_nccl_scenario(
     base_url: str = "http://127.0.0.1:3200",
     *,
@@ -844,13 +822,10 @@ def run_nccl_scenario(
             None,
         )
     steps.append(
-        f"inventory seed={seed} nodes={len(reports)} "
-        f"graph_digest={inv.graph_digest[:18]}…"
+        f"inventory seed={seed} nodes={len(reports)} graph_digest={inv.graph_digest[:18]}…"
     )
 
-    image = (
-        "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-    )
+    image = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 
     # --- Pack plan (concentrate ranks) ---
     steps.append("place_ranks policy=pack world_size=4 nnodes=2")
@@ -1032,8 +1007,7 @@ def run_nccl_scenario(
             None,
         )
     steps.append(
-        f"eth_fallback zeros fabric_gate={eth_fb.fabric_gate} "
-        f"composite={eth_fb.composite}"
+        f"eth_fallback zeros fabric_gate={eth_fb.fabric_gate} composite={eth_fb.composite}"
     )
 
     # --- explicit failed inject still produces LaunchResult ---
@@ -1111,11 +1085,7 @@ def run_weights_scenario(
         or os.environ.get("HYPER_SHARED_TOKEN")
         or ""
     )
-    master = (
-        master_url
-        or os.environ.get("HYPER_MASTER_BASE_URL")
-        or "http://127.0.0.1:3201"
-    )
+    master = master_url or os.environ.get("HYPER_MASTER_BASE_URL") or "http://127.0.0.1:3201"
 
     # Base-compatible ss58-like hotkeys (alpha chars required; no bare UIDs).
     hotkey_a = "5DAAnrj7VHTznn2AaACRrN8iJZqK7PhB1aH6Yqz3G3eQnZf"
@@ -1216,9 +1186,7 @@ def run_weights_scenario(
                     "result": result,
                 }
             # Idempotent re-push
-            again = await client.push_once(
-                weights=weights, epoch=1, revision=result.revision
-            )
+            again = await client.push_once(weights=weights, epoch=1, revision=result.revision)
             steps.append(f"idempotent re-push status={again.status} idemp={again.idempotent}")
             if again.status != "acknowledged":
                 return {"ok": False, "error": f"idempotent push failed: {again.status}"}
@@ -1308,9 +1276,7 @@ def run_weights_scenario(
                     "push path already verified (non-fatal for split-DB)"
                 )
     except httpx.HTTPError as exc:
-        steps.append(
-            f"preview probe skipped ({exc}); push path already verified finite map"
-        )
+        steps.append(f"preview probe skipped ({exc}); push path already verified finite map")
     steps.append("no on-chain set_weights in challenge product path")
 
     return ScenarioResult(
@@ -1450,10 +1416,7 @@ def run_scenario(
         name=key,
         ok=False,
         base_url=base_url.rstrip("/"),
-        message=(
-            f"unknown scenario {name!r}; known: "
-            f"{', '.join(EXTENDED_SCENARIOS)}"
-        ),
+        message=(f"unknown scenario {name!r}; known: {', '.join(EXTENDED_SCENARIOS)}"),
         steps=["unknown scenario name"],
     )
 

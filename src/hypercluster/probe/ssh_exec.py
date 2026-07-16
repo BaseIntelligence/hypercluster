@@ -137,11 +137,15 @@ def default_openssh_runner(
         )
         return proc.returncode, proc.stdout or "", proc.stderr or "", False
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode(
-            "utf-8", errors="replace"
+        stdout = (
+            exc.stdout
+            if isinstance(exc.stdout, str)
+            else (exc.stdout or b"").decode("utf-8", errors="replace")
         )
-        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(
-            "utf-8", errors="replace"
+        stderr = (
+            exc.stderr
+            if isinstance(exc.stderr, str)
+            else (exc.stderr or b"").decode("utf-8", errors="replace")
         )
         return 124, stdout or "", stderr or "ssh timeout", True
     except OSError as exc:
@@ -243,7 +247,7 @@ class RealSshExecutor:
                 argv=list(shlex.split(remote_cmd)) if remote_cmd != "__connect__" else [],
             )
         duration_ms = int((time.perf_counter() - t0) * 1000)
-        self.wall_spent_s += (time.perf_counter() - t0)
+        self.wall_spent_s += time.perf_counter() - t0
         stdout_s = sanitize_output(stdout, max_bytes=self.output_cap_bytes)
         stderr_s = sanitize_output(stderr, max_bytes=self.output_cap_bytes)
         err: str | None = None

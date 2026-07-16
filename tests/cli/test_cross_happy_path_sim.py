@@ -32,16 +32,12 @@ from hypercluster.sim.ports import MAX_MISSION_PORT, MIN_MISSION_PORT
 from hypercluster.sim.scenarios import CROSS_HAPPY_PATH, run_scenario
 
 TOKEN = "test-challenge-shared-token"
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 runner = CliRunner()
 
 
 @pytest.fixture
-def live_cross_api(
-    settings_factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Any:
+def live_cross_api(settings_factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Combined-worker API for full marketplace→job→score chain (mission band)."""
 
     from hypercluster.app import create_app

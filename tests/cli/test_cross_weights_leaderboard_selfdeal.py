@@ -38,9 +38,7 @@ from hypercluster.sim.scenarios import (
 from hypercluster.sim.scenarios import run_scenario
 
 TOKEN = "test-challenge-shared-token"
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 runner = CliRunner()
 
 
@@ -223,9 +221,7 @@ def _stop_master(handles: dict[str, Any] | None) -> None:
 
 
 @pytest.fixture
-def live_stack(
-    settings_factory: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Any:
+def live_stack(settings_factory: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """API + mock-master both on mission ports with shared SQLite."""
 
     master = _spawn_mock_master()
@@ -325,9 +321,10 @@ def test_leaderboard_scores_weights_agree_multi_miner(
     assert order.index(MINER_A) < order.index(MINER_B) < order.index(MINER_C)
     assert float(our[0]["aggregate"]) > float(our[-1]["aggregate"])
 
-    wmap = httpx.get(
-        f"{live_stack['base_url']}/v1/weight-preview", timeout=5.0
-    ).json().get("weights") or {}
+    wmap = (
+        httpx.get(f"{live_stack['base_url']}/v1/weight-preview", timeout=5.0).json().get("weights")
+        or {}
+    )
     assert float(wmap[MINER_A]) > float(wmap[MINER_B]) > float(wmap[MINER_C]) > 0
 
 
@@ -354,18 +351,17 @@ def test_self_deal_demand_supply_finite_and_damped(
     )
     assert result.ok is True, "\n".join(result.steps + [result.message])
 
-    scores = httpx.get(
-        f"{live_stack['base_url']}/v1/scores/{SELF_DEAL_HK}", timeout=5.0
-    ).json()
+    scores = httpx.get(f"{live_stack['base_url']}/v1/scores/{SELF_DEAL_HK}", timeout=5.0).json()
     items = scores.get("items") or []
     roles = {i.get("role") for i in items}
     assert "demand" in roles and "supply" in roles
     for item in items:
         assert float(item["composite"]) >= 0.0
 
-    wmap = httpx.get(
-        f"{live_stack['base_url']}/v1/weight-preview", timeout=5.0
-    ).json().get("weights") or {}
+    wmap = (
+        httpx.get(f"{live_stack['base_url']}/v1/weight-preview", timeout=5.0).json().get("weights")
+        or {}
+    )
     self_w = float(wmap[SELF_DEAL_HK])
     twin_w = float(wmap.get(TWIN_HONEST_HK) or 0.0)
     assert self_w >= 0.0
@@ -409,9 +405,7 @@ def test_mock_master_down_keeps_scores_then_retries_acked(
         def start_master() -> str:
             nonlocal master_handles
             # Prefer same port when free; otherwise any band port.
-            preferred_port = int(
-                master_url_box["url"].rsplit(":", 1)[-1]
-            )
+            preferred_port = int(master_url_box["url"].rsplit(":", 1)[-1])
             master_handles = _spawn_mock_master(preferred=preferred_port)
             master_url_box["url"] = master_handles["base_url"]
             return master_handles["base_url"]
@@ -428,8 +422,7 @@ def test_mock_master_down_keeps_scores_then_retries_acked(
         assert result.ok is True, "\n".join(result.steps + [result.message])
         assert any("scores durable" in s for s in result.steps)
         assert any(
-            "eventual acked" in s or "recovery push status=acknowledged" in s
-            for s in result.steps
+            "eventual acked" in s or "recovery push status=acknowledged" in s for s in result.steps
         )
 
         # Scores still present for all three miners.

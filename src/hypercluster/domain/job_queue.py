@@ -105,9 +105,7 @@ async def cas_status_transition(
     if extra:
         values.update(extra)
     result = await session.execute(
-        update(Job)
-        .where(Job.id == job_id, Job.status.in_(tuple(from_statuses)))
-        .values(**values)
+        update(Job).where(Job.id == job_id, Job.status.in_(tuple(from_statuses))).values(**values)
     )
     return bool(getattr(result, "rowcount", 0) == 1)
 
@@ -232,9 +230,7 @@ async def apply_bind(
 
 
 async def placement_count(session: AsyncSession, job_id: str) -> int:
-    result = await session.execute(
-        select(JobPlacement.id).where(JobPlacement.job_id == job_id)
-    )
+    result = await session.execute(select(JobPlacement.id).where(JobPlacement.job_id == job_id))
     return len(list(result.scalars().all()))
 
 

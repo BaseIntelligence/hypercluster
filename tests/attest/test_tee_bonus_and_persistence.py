@@ -28,9 +28,7 @@ from hypercluster.domain.scoring_tee import (
 )
 from hypercluster.settings import HyperSettings
 
-COMPOSE_GOLDEN = (
-    "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
-)
+COMPOSE_GOLDEN = "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
 IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 NONCE = "n0nce-bonus-path-aaaa-bbbb-cccc-222222222222"
 
@@ -464,9 +462,7 @@ async def test_job_proofs_persist_verdict_and_score_bonus_invariant(
 
             # --- GPU tier higher bonus ---
             job_gpu_id = str(uuid.uuid4())
-            report_g = build_report_data(
-                job_id=job_gpu_id, image_digest=IMAGE, nonce=nonce
-            )
+            report_g = build_report_data(job_id=job_gpu_id, image_digest=IMAGE, nonce=nonce)
             gpu_ev = mock_gpu_evidence(nonce=nonce)
             from hypercluster.attest.offline_fixtures import OfflineQuoteEnvelope
 
@@ -594,9 +590,7 @@ async def test_job_proofs_persist_verdict_and_score_bonus_invariant(
             # VAL-TEE-020 hard join invariant over scores ↔ proofs.
             rows = (
                 await session.execute(
-                    select(Score, JobProof).join(
-                        JobProof, JobProof.attempt_id == Score.attempt_id
-                    )
+                    select(Score, JobProof).join(JobProof, JobProof.attempt_id == Score.attempt_id)
                 )
             ).all()
             assert rows
@@ -609,11 +603,8 @@ async def test_job_proofs_persist_verdict_and_score_bonus_invariant(
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_sim_job_tee_bonus_one(
-    settings_factory, tmp_path: Path
-) -> None:
+async def test_lifecycle_sim_job_tee_bonus_one(settings_factory, tmp_path: Path) -> None:
     """VAL-TEE-005 + VAL-TEE-015: lifecycle sim collect stores score bonus 1.0."""
-
 
     from httpx import ASGITransport, AsyncClient
 

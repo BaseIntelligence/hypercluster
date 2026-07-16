@@ -45,9 +45,7 @@ from hypercluster.sim.scenarios import (
 )
 
 TOKEN = "test-challenge-shared-token"
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 runner = CliRunner()
 
 docker_required = pytest.mark.skipif(
@@ -226,9 +224,7 @@ def _stop_master(handles: dict[str, Any] | None) -> None:
 
 
 @pytest.fixture
-def live_stack(
-    settings_factory: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Any:
+def live_stack(settings_factory: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     master = _spawn_mock_master()
     try:
         api = _spawn_api(

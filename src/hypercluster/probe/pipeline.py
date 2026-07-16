@@ -86,9 +86,7 @@ _UUID_RE = re.compile(
     r"^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-_SMI_L_RE = re.compile(
-    r"GPU\s+\d+:\s*(?P<name>.+?)\s*\(UUID:\s*(?P<uuid>GPU-[0-9a-fA-F-]+)\)"
-)
+_SMI_L_RE = re.compile(r"GPU\s+\d+:\s*(?P<name>.+?)\s*\(UUID:\s*(?P<uuid>GPU-[0-9a-fA-F-]+)\)")
 
 
 @dataclass
@@ -379,9 +377,7 @@ def run_gpu_probe(
                 )
         else:
             # Seed measured from -L; query enriches next.
-            measured.gpus = [
-                MeasuredGpu(name=n, uuid=u) for n, u in names_uuids
-            ]
+            measured.gpus = [MeasuredGpu(name=n, uuid=u) for n, u in names_uuids]
             measured.gpu_count = len(measured.gpus)
             if record(
                 _check(
@@ -416,9 +412,7 @@ def run_gpu_probe(
             "gpu_count",
             fatal=True,
             passed=count_ok,
-            message=(
-                f"gpu_count={count}" if count_ok else f"gpu_count out of range: {count}"
-            ),
+            message=(f"gpu_count={count}" if count_ok else f"gpu_count out of range: {count}"),
             details={"gpu_count": count, "max": cfg.max_gpu_count},
         )
     ):
@@ -598,9 +592,7 @@ def run_gpu_probe(
             fatal=docker_fatal,
             passed=docker_ok,
             message=(
-                "nvidia docker runtime present"
-                if docker_ok
-                else "nvidia docker runtime missing"
+                "nvidia docker runtime present" if docker_ok else "nvidia docker runtime missing"
             ),
             duration_ms=dinfo.duration_ms,
             details=docker_meta,
@@ -626,9 +618,7 @@ def run_gpu_probe(
             fatal=False,
             passed=power_ok,
             message=(
-                "power limit ok"
-                if power_ok
-                else f"power limit ratio < {cfg.power_limit_min_ratio}"
+                "power limit ok" if power_ok else f"power limit ratio < {cfg.power_limit_min_ratio}"
             ),
             details={"gpus": power_details},
         )
@@ -674,9 +664,7 @@ def run_gpu_probe(
                 fatal=fp_fatal,
                 passed=stable,
                 message=(
-                    "fingerprint stable"
-                    if stable
-                    else "fingerprint churn; re-admit required"
+                    "fingerprint stable" if stable else "fingerprint churn; re-admit required"
                 ),
                 details={
                     "prior": sorted(prior),

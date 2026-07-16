@@ -37,9 +37,7 @@ POSITIVE = FIXTURES / "positive_tdx_v1.json"
 JOB_A = "job-offline-positive-0001"
 IMAGE_A = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 NONCE_A = "n0nce-posit1ve-aaaa-bbbb-cccc-111111111111"
-COMPOSE_GOLDEN = (
-    "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
-)
+COMPOSE_GOLDEN = "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
 
 
 def _policy(**overrides: object) -> TeeVerifyPolicy:
@@ -125,8 +123,7 @@ def test_mutated_compose_hash_rejected() -> None:
     bad = env.model_copy(
         update={
             "compose_hash": (
-                "sha256:deadbeefdeadbeefdeadbeefdeadbeef"
-                "deadbeefdeadbeefdeadbeefdeadbeef"
+                "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
             )
         }
     )
@@ -159,8 +156,7 @@ def test_wrong_compose_with_allowlist_also_documents_mismatch_when_fixture_marke
         update={
             "compose_hash": COMPOSE_GOLDEN,
             "expected_compose_hash": (
-                "sha256:11111111111111111111111111111111"
-                "11111111111111111111111111111111"
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
             ),
         }
     )
@@ -318,10 +314,7 @@ def test_unknown_compose_hash_fail_closed_allowlist() -> None:
     """VAL-TEE-016: compose_hash not on allowlist rejected."""
 
     env = load_quote_fixture(POSITIVE)
-    foreign = (
-        "sha256:ffffffffffffeeeeeeeeeeeeeeeeeeee"
-        "ddddddddddddddddcccccccccccccc"
-    )
+    foreign = "sha256:ffffffffffffeeeeeeeeeeeeeeeeeeeeddddddddddddddddcccccccccccccc"
     env2 = env.model_copy(
         update={
             "compose_hash": foreign,
@@ -379,8 +372,7 @@ def test_multiple_reason_codes_on_compound_failure() -> None:
     compound = env.model_copy(
         update={
             "compose_hash": (
-                "sha256:badcompose00badcompose00badcompose00"
-                "badcompose00badcompose00badcomp00"
+                "sha256:badcompose00badcompose00badcompose00badcompose00badcompose00badcomp00"
             ),
             "expected_compose_hash": COMPOSE_GOLDEN,  # internal vs actual mismatch
             "tcb_status": "Revoked",

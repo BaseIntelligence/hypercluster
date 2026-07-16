@@ -199,9 +199,7 @@ async def test_post_probe_rejects_raw_pem_body(probe_client: AsyncClient) -> Non
     assert response.status_code in {400, 422}, response.text
     detail = response.json().get("detail") or {}
     if isinstance(detail, dict):
-        assert "private" in str(detail.get("code", detail)).lower() or "key" in str(
-            detail
-        ).lower()
+        assert "private" in str(detail.get("code", detail)).lower() or "key" in str(detail).lower()
 
 
 # ----- VAL-GPU-002 / 003 / 004 / 005: evidence latest / by id / list / global ---
@@ -288,9 +286,7 @@ async def test_get_latest_and_by_id_and_list_and_global(probe_client: AsyncClien
 
 @pytest.mark.asyncio
 async def test_list_empty_for_unknown_or_unprobed_node(probe_client: AsyncClient) -> None:
-    empty = await probe_client.get(
-        "/v1/nodes/00000000-0000-0000-0000-000000000099/probes/gpu"
-    )
+    empty = await probe_client.get("/v1/nodes/00000000-0000-0000-0000-000000000099/probes/gpu")
     assert empty.status_code == 200, empty.text
     items = empty.json().get("items")
     if items is None:
@@ -375,10 +371,7 @@ async def test_external_evidence_attach_rejects_unsigned_and_bad_digest(
     }
     import hashlib
 
-    digest = (
-        "sha256:"
-        + hashlib.sha256(canonical_json(payload_for_hash).encode()).hexdigest()
-    )
+    digest = "sha256:" + hashlib.sha256(canonical_json(payload_for_hash).encode()).hexdigest()
     good_evidence["digests"] = {
         "evidence_sha256": digest,
         "inventory_sha256": digest,

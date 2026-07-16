@@ -26,9 +26,7 @@ PROVIDER_HK = "cross-happy-provider-hotkey-aaaaaaaaaaaaaaaaaaaaaa"
 DEMAND_HK = "cross-happy-demand-hotkey-bbbbbbbbbbbbbbbbbbbbbbbb"
 FOREIGN_HK = "cross-happy-foreign-hotkey-cccccccccccccccccccccccc"
 
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 
 # Host substrings that must never appear in outbound requests during pure sim.
 # Shared with hypercluster.no_verda (VAL-LIVE-001/011 + VAL-CROSS-013).
@@ -486,9 +484,7 @@ def run_cross_happy_path(
                         report,
                     )
                 own_items = own_list.json().get("items") or []
-                if not any(
-                    isinstance(j, dict) and j.get("id") == job_id for j in own_items
-                ):
+                if not any(isinstance(j, dict) and j.get("id") == job_id for j in own_items):
                     return _fail(
                         "cross-happy-path",
                         normalized,
@@ -509,9 +505,7 @@ def run_cross_happy_path(
                         report,
                     )
                 foreign_items = foreign_list.json().get("items") or []
-                if any(
-                    isinstance(j, dict) and j.get("id") == job_id for j in foreign_items
-                ):
+                if any(isinstance(j, dict) and j.get("id") == job_id for j in foreign_items):
                     return _fail(
                         "cross-happy-path",
                         normalized,
@@ -585,9 +579,9 @@ def run_cross_happy_path(
                 has_attempt = attempt_get.status_code == 200
                 if has_attempt:
                     attempt_body = attempt_get.json()
-                    ids["attempt_id"] = str(
-                        attempt_body.get("id") or attempt_body.get("attempt_id") or ""
-                    ) or None
+                    ids["attempt_id"] = (
+                        str(attempt_body.get("id") or attempt_body.get("attempt_id") or "") or None
+                    )
 
                 # Foreign results must be refused even post-success (403 or 409 sealed).
                 foreign_results = _signed_request(
@@ -618,9 +612,7 @@ def run_cross_happy_path(
                         steps,
                         report,
                     )
-                steps.append(
-                    f"foreign results refused HTTP {foreign_results.status_code}"
-                )
+                steps.append(f"foreign results refused HTTP {foreign_results.status_code}")
 
                 # Provider happy path post (idempotent if already terminal).
                 provider_results = _signed_request(
@@ -655,9 +647,7 @@ def run_cross_happy_path(
                         steps,
                         report,
                     )
-                steps.append(
-                    f"provider results ok HTTP {provider_results.status_code}"
-                )
+                steps.append(f"provider results ok HTTP {provider_results.status_code}")
 
                 # ----- Score + leaderboard + weights (causal 1:1) -----
                 steps.append("scores for demand hotkey")
@@ -699,8 +689,7 @@ def run_cross_happy_path(
                         report,
                     )
                 steps.append(
-                    f"score_id={ids['score_id']} composite={composite} "
-                    f"count={len(score_items)}"
+                    f"score_id={ids['score_id']} composite={composite} count={len(score_items)}"
                 )
 
                 steps.append("leaderboard mass for demand hotkey")
@@ -804,9 +793,7 @@ def run_cross_happy_path(
                         steps,
                         report,
                     )
-                steps.append(
-                    f"weights demand={demand_w} positive_keys={positive_keys}"
-                )
+                steps.append(f"weights demand={demand_w} positive_keys={positive_keys}")
 
                 # Threaded IDs summary (VAL-CROSS-002 evidence).
                 timeline = (
@@ -828,9 +815,7 @@ def run_cross_happy_path(
 
     # ----- VAL-CROSS-013: no Verda during pure sim -----
     verda_hits = egress.verda_hits()
-    steps.append(
-        f"egress requests={len(egress.requests)} verda_hits={len(verda_hits)}"
-    )
+    steps.append(f"egress requests={len(egress.requests)} verda_hits={len(verda_hits)}")
     if verda_hits:
         sample = ", ".join(f"{h.method} {h.url}" for h in verda_hits[:5])
         return ScenarioResult(

@@ -237,19 +237,21 @@ async def test_cancel_non_terminal_job(slow_life_client: AsyncClient) -> None:
     await _poll_until(
         slow_life_client,
         job_id,
-        predicate=lambda p: p.get("status")
-        in {
-            "admitted",
-            "placing",
-            "provisioning",
-            "running",
-            "collecting",
-            "scoring",
-            "succeeded",
-            "cancelled",
-            "failed",
-            "timeout",
-        },
+        predicate=lambda p: (
+            p.get("status")
+            in {
+                "admitted",
+                "placing",
+                "provisioning",
+                "running",
+                "collecting",
+                "scoring",
+                "succeeded",
+                "cancelled",
+                "failed",
+                "timeout",
+            }
+        ),
         timeout=2.0,
     )
 
@@ -288,9 +290,10 @@ async def test_cancel_non_terminal_job(slow_life_client: AsyncClient) -> None:
     )
     assert bad.status_code in {401, 403}, bad.text
     still = await slow_life_client.get(f"/v1/jobs/{job2}")
-    assert still.json().get("status") != "cancelled" or still.json().get(
-        "submitter_hotkey"
-    ) == SUBMITTER_HK
+    assert (
+        still.json().get("status") != "cancelled"
+        or still.json().get("submitter_hotkey") == SUBMITTER_HK
+    )
     # Must not have been cancelled by the foreign hotkey.
     if still.json().get("status") == "cancelled":
         # Only allowed if submitter cancelled (not here).
@@ -347,8 +350,7 @@ async def test_timeout_watchdog_marks_timeout(settings_factory, tmp_path) -> Non
             assert terminal.get("finished_at") is not None
             fcode = str(terminal.get("failure_code") or "").lower()
             assert (
-                terminal.get("failure_code") in {"timeout", "job_timeout", None}
-                or "time" in fcode
+                terminal.get("failure_code") in {"timeout", "job_timeout", None} or "time" in fcode
             )
 
 
@@ -671,12 +673,7 @@ async def test_entrypoint_env_in_launch_contract(life_client: AsyncClient) -> No
     att = await life_client.get(f"/v1/jobs/{job_id}/attempts/1")
     assert att.status_code == 200, att.text
     att_payload = att.json()
-    contract = (
-        att_payload.get("launch_contract")
-        or launch
-        or placement
-        or att_payload
-    )
+    contract = att_payload.get("launch_contract") or launch or placement or att_payload
     blob = json.dumps(contract)
     assert "python" in blob or "train" in blob or entrypoint[0] in blob
     # Env keys from spec present; NCCL keys from planner must not be wiped.

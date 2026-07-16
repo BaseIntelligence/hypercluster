@@ -46,9 +46,7 @@ def resolve_sim_seed(
     try:
         return int(raw, 10)
     except ValueError as exc:
-        raise ValueError(
-            f"{SIM_SEED_ENV}={raw!r} is not an integer seed"
-        ) from exc
+        raise ValueError(f"{SIM_SEED_ENV}={raw!r} is not an integer seed") from exc
 
 
 def cli_seed_option_default() -> int:
@@ -73,9 +71,7 @@ def inventory_shape_digest(inventory: SimInventory) -> str:
         "graph_digest": inventory.graph_digest,
         "report_digests": [n.fabric_report.report_digest for n in inventory.nodes],
     }
-    return DIGEST_PREFIX + hashlib.sha256(
-        canonical_json(body).encode()
-    ).hexdigest()
+    return DIGEST_PREFIX + hashlib.sha256(canonical_json(body).encode()).hexdigest()
 
 
 __all__ = [

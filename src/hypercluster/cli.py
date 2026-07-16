@@ -429,9 +429,7 @@ def fabric_plan_cmd(
         nnodes = int(loaded.get("nnodes", nnodes))
         nproc_per_node = int(loaded.get("nproc_per_node", nproc_per_node))
         policy = str(loaded.get("policy") or loaded.get("placement_policy") or policy)
-        fabric = str(
-            loaded.get("fabric") or loaded.get("fabric_mode") or fabric
-        )
+        fabric = str(loaded.get("fabric") or loaded.get("fabric_mode") or fabric)
         seed = int(loaded.get("seed", seed))
         if job_id is None and loaded.get("job_id"):
             job_id = str(loaded["job_id"])
@@ -502,10 +500,10 @@ def _fabric_launch_allowed() -> bool:
     """True only when explicit dev gate env is set (VAL-CLI-010)."""
 
     raw = (
-        os.environ.get("HYPER_ALLOW_FABRIC_LAUNCH")
-        or os.environ.get("HYPER_FABRIC_LAUNCH")
-        or ""
-    ).strip().lower()
+        (os.environ.get("HYPER_ALLOW_FABRIC_LAUNCH") or os.environ.get("HYPER_FABRIC_LAUNCH") or "")
+        .strip()
+        .lower()
+    )
     return raw in {"1", "true", "yes", "on"}
 
 

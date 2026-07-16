@@ -252,9 +252,7 @@ def run_host_gpu_probe(
     )
     from typing import Literal
 
-    mode_norm: Literal["full", "quick"] = (
-        "quick" if str(mode).lower() == "quick" else "full"
-    )
+    mode_norm: Literal["full", "quick"] = "quick" if str(mode).lower() == "quick" else "full"
     config = GpuProbeConfig(
         mode=mode_norm,
         require_docker_runtime=bool(require_docker),

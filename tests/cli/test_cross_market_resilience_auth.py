@@ -32,9 +32,7 @@ from hypercluster.sim.scenarios import CROSS_MARKET_RESILIENCE as SCENARIO_NAME
 from hypercluster.sim.scenarios import run_scenario
 
 TOKEN = "test-challenge-shared-token"
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 runner = CliRunner()
 
 

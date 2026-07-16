@@ -436,9 +436,7 @@ def test_score_recompute_and_weights_preview(
     assert "SUPERSECRET" not in prev.stdout
 
 
-def test_weights_push_redacts_token(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_weights_push_redacts_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """VAL-CLI-012: push prints redacted fingerprint, never full token value."""
 
     secret = "NEVER-ECHO-THIS-TOKEN-VALUE-zzzz-deadbeef"
@@ -478,9 +476,7 @@ def test_weights_push_redacts_token(
     assert secret not in combined
 
 
-def test_weights_push_with_mock_master_ack(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_weights_push_with_mock_master_ack(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """VAL-CLI-012: push against in-process mock-master can ack without echoing token."""
 
     import asyncio

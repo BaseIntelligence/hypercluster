@@ -86,9 +86,7 @@ async def test_require_ib_rent_ok_with_ib_nodes(market_client: AsyncClient) -> N
         inventory={
             "has_ib": True,
             "ib_rate_gbps": 200,
-            "ib_devices": [
-                {"name": "mlx5_0", "port": 1, "rate_gbps": 200.0, "state": "Active"}
-            ],
+            "ib_devices": [{"name": "mlx5_0", "port": 1, "rate_gbps": 200.0, "state": "Active"}],
         },
     )
     node_id = node["id"]
@@ -132,9 +130,7 @@ async def test_require_ib_rent_rejected_after_ib_stripped(market_client: AsyncCl
         inventory={
             "has_ib": True,
             "ib_rate_gbps": 200.0,
-            "ib_devices": [
-                {"name": "mlx5_0", "port": 1, "rate_gbps": 200.0, "state": "Active"}
-            ],
+            "ib_devices": [{"name": "mlx5_0", "port": 1, "rate_gbps": 200.0, "state": "Active"}],
         },
     )
     node_id = node["id"]
@@ -192,15 +188,9 @@ def test_require_ib_check_function_docs_rent_policy() -> None:
 
     ib = build_fabric_report(
         node_id="n1",
-        ib_devices=[
-            {"name": "mlx5_0", "rate_gbps": 200.0, "port": 1, "state": "Active"}
-        ],
+        ib_devices=[{"name": "mlx5_0", "rate_gbps": 200.0, "port": 1, "state": "Active"}],
         gpu_count=1,
     )
     eth = build_fabric_report(node_id="n1", ib_devices=[], gpu_count=1)
-    assert evaluate_require_ib_nodes(
-        require_ib=True, reports=[ib], node_ids=["n1"]
-    ).may_rent
-    assert not evaluate_require_ib_nodes(
-        require_ib=True, reports=[eth], node_ids=["n1"]
-    ).may_rent
+    assert evaluate_require_ib_nodes(require_ib=True, reports=[ib], node_ids=["n1"]).may_rent
+    assert not evaluate_require_ib_nodes(require_ib=True, reports=[eth], node_ids=["n1"]).may_rent

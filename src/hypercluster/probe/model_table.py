@@ -149,9 +149,7 @@ def models_match(claimed: str | None, measured: str | None) -> bool:
 
 
 def lookup_vram_window(name_or_family: str | None) -> VramWindow | None:
-    family = normalize_gpu_model(name_or_family) or (
-        (name_or_family or "").strip().lower() or None
-    )
+    family = normalize_gpu_model(name_or_family) or ((name_or_family or "").strip().lower() or None)
     if family is None:
         return None
     return _VRAM.get(family)

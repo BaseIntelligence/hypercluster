@@ -465,8 +465,7 @@ async def nodes_heartbeat(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": meta.get("code") or "gpu_probe_unverified",
-                "message": meta.get("message")
-                or "live evidence required for heartbeat",
+                "message": meta.get("message") or "live evidence required for heartbeat",
                 "unverified_node_ids": meta.get("unverified_node_ids") or [],
             },
         )

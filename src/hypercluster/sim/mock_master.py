@@ -216,9 +216,7 @@ async def list_raw_weights(slug: str) -> dict[str, Any]:
 
     items = [
         rec
-        for (s, _e, _r), rec in sorted(
-            _SNAPSHOTS.items(), key=lambda kv: (kv[0][1], kv[0][2])
-        )
+        for (s, _e, _r), rec in sorted(_SNAPSHOTS.items(), key=lambda kv: (kv[0][1], kv[0][2]))
         if s == slug
     ]
     return {"slug": slug, "items": items, "count": len(items)}

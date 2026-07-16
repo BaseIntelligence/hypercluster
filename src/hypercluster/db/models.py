@@ -876,9 +876,7 @@ class WeightSnapshot(Base):
     """
 
     __tablename__ = "weight_snapshots"
-    __table_args__ = (
-        UniqueConstraint("epoch", "revision", name="uq_weight_snapshots_epoch_rev"),
-    )
+    __table_args__ = (UniqueConstraint("epoch", "revision", name="uq_weight_snapshots_epoch_rev"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     epoch: Mapped[int] = mapped_column(Integer, nullable=False, index=True)

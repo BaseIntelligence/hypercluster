@@ -607,9 +607,7 @@ def _run_probe_gpu(
         emit(
             payload,
             as_json=as_json,
-            human_line=(
-                f"probe-gpu http={response.status_code} code={err_code}"
-            ),
+            human_line=(f"probe-gpu http={response.status_code} code={err_code}"),
         )
         raise typer.Exit(code=_probe_exit_code(payload, http_status=response.status_code))
 
@@ -786,8 +784,7 @@ def _register_nodes_probe_commands(nodes_app: typer.Typer) -> None:
             payload,
             as_json=as_json,
             human_line=(
-                f"evidence items={len((payload or {}).get('items') or [])} "
-                f"node_id={node_id}"
+                f"evidence items={len((payload or {}).get('items') or [])} node_id={node_id}"
             ),
         )
         raise typer.Exit(code=0)
@@ -819,9 +816,7 @@ def _register_nodes_probe_commands(nodes_app: typer.Typer) -> None:
         emit(
             payload,
             as_json=as_json,
-            human_line=(
-                f"latest evidence_id={evidence_id} status={payload.get('status')}"
-            ),
+            human_line=(f"latest evidence_id={evidence_id} status={payload.get('status')}"),
         )
         raise typer.Exit(code=0)
 

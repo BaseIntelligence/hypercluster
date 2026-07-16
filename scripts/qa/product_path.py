@@ -523,9 +523,7 @@ def run_product_gpu_probe(
         )
         payload = _safe_json(resp)
         if resp.status_code != 200:
-            raise RuntimeError(
-                f"product gpu probe HTTP {resp.status_code}: {payload}"
-            )
+            raise RuntimeError(f"product gpu probe HTTP {resp.status_code}: {payload}")
         evidence_id = None
         if isinstance(payload, dict):
             evidence_id = payload.get("evidence_id") or payload.get("id")
@@ -535,9 +533,7 @@ def run_product_gpu_probe(
         latest = client.get(f"{base}/v1/nodes/{node_id}/probes/gpu/latest")
         latest_body = _safe_json(latest)
         if latest.status_code != 200:
-            raise RuntimeError(
-                f"GET latest evidence HTTP {latest.status_code}: {latest_body}"
-            )
+            raise RuntimeError(f"GET latest evidence HTTP {latest.status_code}: {latest_body}")
         latest_id = None
         if isinstance(latest_body, dict):
             latest_id = latest_body.get("evidence_id") or latest_body.get("id")
@@ -630,9 +626,7 @@ def attach_host_probe_evidence(
         )
         payload = _safe_json(resp)
         if resp.status_code != 200:
-            raise RuntimeError(
-                f"attach external evidence HTTP {resp.status_code}: {payload}"
-            )
+            raise RuntimeError(f"attach external evidence HTTP {resp.status_code}: {payload}")
         evidence_id = None
         if isinstance(payload, dict):
             evidence_id = payload.get("evidence_id") or payload.get("id")

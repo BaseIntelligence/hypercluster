@@ -1,0 +1,202 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*.*.*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: "Type true to publish the Docker image to GHCR"
+        required: true
+        default: "false"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/baseintelligence/hypercluster
+  # Pin matches pyproject dependencies (release wheel). staging script re-reads pyproject.
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Mypy type check
+        run: uv run mypy
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  no-verda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Product path no-verda fence
+        run: uv run python scripts/check_no_verda.py
+      - name: Module entrypoint no-verda audit
+        run: |
+          uv run python -c "
+          from pathlib import Path
+          from hypercluster.no_verda import run_product_verda_audit
+          report = run_product_verda_audit(Path('.').resolve())
+          print('\n'.join(report.summary_lines()))
+          raise SystemExit(0 if report.ok else 1)
+          "
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Pytest with coverage
+        # live_verda + integration stay opt-in (real cloud / SSH). Default addopts
+        # already deselect them; restate markers for job clarity.
+        run: >-
+          uv run pytest
+          -m "not live_verda and not integration"
+          --cov=hypercluster
+          --cov-report=term-missing
+          --cov-fail-under=70
+
+  docker-build:
+    needs:
+      - lint
+      - format
+      - no-verda
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage Base SDK wheel into docker/vendor
+        run: bash scripts/stage_base_wheel.sh
+      - uses: docker/setup-buildx-action@v3
+      - name: Build hypercluster runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:ci-${{ github.sha }}
+
+  docker-publish:
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' ||
+       startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.confirm_publish == 'true'))
+    needs:
+      - docker-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage Base SDK wheel into docker/vendor
+        run: bash scripts/stage_base_wheel.sh
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  github-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - docker-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Prepare release metadata
+        id: release
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Hypercluster ${{ steps.release.outputs.version }}
+          generate_release_notes: true
+          append_body: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          body: |
+            ## Container Image
+
+            - `ghcr.io/baseintelligence/hypercluster:${{ steps.release.outputs.version }}`
+            - `ghcr.io/baseintelligence/hypercluster:${{ github.ref_name }}`
+            - `ghcr.io/baseintelligence/hypercluster:sha-${{ github.sha }}`
+
+            ## Deployment Notes
+
+            BASE master deployments should pin the SemVer image tag plus the
+            immutable `@sha256` digest. The `latest` tag is published only from
+            `main`, not from release tags.

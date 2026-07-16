@@ -390,9 +390,9 @@ async def run_node_gpu_probe(
         node_id=node.id,
         provider_hotkey=provider.hotkey,
         ssh_endpoint=node.ssh_endpoint,
-        claimed=fixture_claimed if (cfg.ssh_transport or "").lower() in {
-            "fake", "fakessh", "sim"
-        } else ClaimedInventory(
+        claimed=fixture_claimed
+        if (cfg.ssh_transport or "").lower() in {"fake", "fakessh", "sim"}
+        else ClaimedInventory(
             gpu_model=node.gpu_model or fixture_claimed.gpu_model,
             gpu_count=int(node.gpu_count or fixture_claimed.gpu_count),
         ),

@@ -138,9 +138,7 @@ async def register_node(
 
     if existing is not None:
         existing.hostname = hostname if hostname is not None else existing.hostname
-        existing.ssh_endpoint = (
-            ssh_endpoint if ssh_endpoint is not None else existing.ssh_endpoint
-        )
+        existing.ssh_endpoint = ssh_endpoint if ssh_endpoint is not None else existing.ssh_endpoint
         existing.gpu_model = str(gpu_model).strip()
         existing.gpu_count = gpu_count
         existing.cpu_cores = cpu_cores if cpu_cores is not None else existing.cpu_cores
@@ -246,9 +244,7 @@ async def node_heartbeat(
             )
         nodes = [node]
     else:
-        result = await session.execute(
-            select(Node).where(Node.provider_id == provider.id)
-        )
+        result = await session.execute(select(Node).where(Node.provider_id == provider.id))
         nodes = list(result.scalars().all())
         if not nodes:
             raise NodeError("no_nodes", "provider has no registered nodes", status_code=404)

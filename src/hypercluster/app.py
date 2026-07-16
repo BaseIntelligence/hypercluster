@@ -195,9 +195,7 @@ def create_app(
         # VAL-CROSS-026: drain forces ready=false → mutations 503 /runtime_not_ready.
         return not bool(drain_state.get("draining"))
 
-    readiness_probes = (
-        ReadinessProbe(name="not_draining", check=_not_draining, required=True),
-    )
+    readiness_probes = (ReadinessProbe(name="not_draining", check=_not_draining, required=True),)
 
     app = create_challenge_app(
         settings=app_settings,
@@ -230,9 +228,7 @@ def create_app(
         path = request.url.path.rstrip("/") or "/"
         if path == "/v1/sim/drain":
             if request.method == "GET":
-                return JSONResponse(
-                    {"ok": True, "draining": bool(drain_state.get("draining"))}
-                )
+                return JSONResponse({"ok": True, "draining": bool(drain_state.get("draining"))})
             if request.method in {"POST", "PUT", "PATCH"}:
                 try:
                     payload = await request.json()

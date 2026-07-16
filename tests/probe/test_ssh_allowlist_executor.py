@@ -382,9 +382,7 @@ def test_key_ref_file_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 def test_reject_body_private_key_fields() -> None:
     with pytest.raises(KeyMaterialError) as ei:
-        reject_body_private_key_fields(
-            {"node_id": "x", "private_key": SAMPLE_PEM, "mode": "full"}
-        )
+        reject_body_private_key_fields({"node_id": "x", "private_key": SAMPLE_PEM, "mode": "full"})
     assert ei.value.code == "private_key_not_allowed"
     with pytest.raises(KeyMaterialError):
         reject_body_private_key_fields({"key_pem": "-----BEGIN RSA PRIVATE KEY-----\nabc"})
@@ -457,8 +455,7 @@ def test_real_executor_connect_and_run_allowlisted() -> None:
         if "nvidia-smi -L" in remote_cmd:
             return (
                 0,
-                "GPU 0: Tesla V100-SXM2-16GB "
-                "(UUID: GPU-11111111-1111-1111-1111-111111111111)\n",
+                "GPU 0: Tesla V100-SXM2-16GB (UUID: GPU-11111111-1111-1111-1111-111111111111)\n",
                 "",
                 False,
             )

@@ -49,9 +49,7 @@ def _job(*, hotkey: str, job_id: str | None = None) -> Job:
         id=job_id or str(uuid.uuid4()),
         submitter_hotkey=hotkey,
         status="succeeded",
-        image_digest=(
-            "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-        ),
+        image_digest=("sha256:sim000000000000000000000000000000000000000000000000000000000001"),
         entrypoint_json=json.dumps(["python", "-m", "train"]),
         world_size=1,
         nnodes=1,
@@ -164,9 +162,7 @@ def test_finite_non_negative_helper() -> None:
 
 
 @pytest.mark.asyncio
-async def test_score_rows_bind_hotkey_and_role(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_score_rows_bind_hotkey_and_role(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-SCORE-008: scores bind hotkey + role; history lists role."""
 
     from hypercluster.app import create_app
@@ -182,12 +178,8 @@ async def test_score_rows_bind_hotkey_and_role(
     async with app.router.lifespan_context(app):
         database = app.state.database
         async with database.session() as session:
-            await _seed_score(
-                session, hotkey=hotkey, role="demand", composite_efficiency=2.0
-            )
-            await _seed_score(
-                session, hotkey=hotkey, role="supply", composite_efficiency=1.5
-            )
+            await _seed_score(session, hotkey=hotkey, role="demand", composite_efficiency=2.0)
+            await _seed_score(session, hotkey=hotkey, role="supply", composite_efficiency=1.5)
             await session.commit()
 
             ok, missing = score_rows_bind_hotkey_role(
@@ -197,9 +189,7 @@ async def test_score_rows_bind_hotkey_and_role(
             assert missing == []
 
         transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get(f"/v1/scores/{hotkey}")
             assert resp.status_code == 200, resp.text
             body = resp.json()
@@ -237,15 +227,9 @@ async def test_multi_hotkey_ranking_reflects_composite_mass(
         database = app.state.database
         async with database.session() as session:
             # A has more mass than B
-            await _seed_score(
-                session, hotkey=hotkey_a, role="demand", composite_efficiency=10.0
-            )
-            await _seed_score(
-                session, hotkey=hotkey_a, role="demand", composite_efficiency=5.0
-            )
-            await _seed_score(
-                session, hotkey=hotkey_b, role="demand", composite_efficiency=3.0
-            )
+            await _seed_score(session, hotkey=hotkey_a, role="demand", composite_efficiency=10.0)
+            await _seed_score(session, hotkey=hotkey_a, role="demand", composite_efficiency=5.0)
+            await _seed_score(session, hotkey=hotkey_b, role="demand", composite_efficiency=3.0)
             await session.commit()
 
             weights = await compute_raw_weights(session, hyper=hyper)
@@ -260,9 +244,7 @@ async def test_multi_hotkey_ranking_reflects_composite_mass(
             assert board[0]["aggregate"] > board[1]["aggregate"]
 
         transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             lb = await client.get("/v1/leaderboard")
             assert lb.status_code == 200, lb.text
             rows = lb.json()["items"]
@@ -280,9 +262,7 @@ async def test_multi_hotkey_ranking_reflects_composite_mass(
 
 
 @pytest.mark.asyncio
-async def test_empty_participation_burn_safe(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_empty_participation_burn_safe(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-SCORE-010 + VAL-SCORE-029: vacant empty-safe, no NaN, no invented ranks."""
 
     from hypercluster.app import create_app
@@ -298,9 +278,7 @@ async def test_empty_participation_burn_safe(
     async with app.router.lifespan_context(app):
         # No scores seeded — vacant first visit
         transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             lb = await client.get("/v1/leaderboard")
             assert lb.status_code == 200, lb.text
             body = lb.json()
@@ -332,9 +310,7 @@ async def test_empty_participation_burn_safe(
 
 
 @pytest.mark.asyncio
-async def test_self_deal_soft_penalty_reduces_mass(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_self_deal_soft_penalty_reduces_mass(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-SCORE-012: same efficiency, self-deal mass < honest twin; finite ≥0."""
 
     from hypercluster.app import create_app
@@ -379,9 +355,7 @@ async def test_self_deal_soft_penalty_reduces_mass(
 
 
 @pytest.mark.asyncio
-async def test_score_window_bounds_contribution(
-    settings_factory: Any, tmp_path: Path
-) -> None:
+async def test_score_window_bounds_contribution(settings_factory: Any, tmp_path: Path) -> None:
     """VAL-SCORE-022: only last N attempts contribute; old mass drops after recompute."""
 
     from datetime import timedelta
@@ -401,18 +375,12 @@ async def test_score_window_bounds_contribution(
     async with app.router.lifespan_context(app):
         database = app.state.database
         async with database.session() as session:
-            old = await _seed_score(
-                session, hotkey=hk, role="demand", composite_efficiency=100.0
-            )
+            old = await _seed_score(session, hotkey=hk, role="demand", composite_efficiency=100.0)
             # Force old created_at into the past so window order is deterministic.
             old.created_at = utc_now() - timedelta(hours=3)
-            mid = await _seed_score(
-                session, hotkey=hk, role="demand", composite_efficiency=1.0
-            )
+            mid = await _seed_score(session, hotkey=hk, role="demand", composite_efficiency=1.0)
             mid.created_at = utc_now() - timedelta(hours=2)
-            await _seed_score(
-                session, hotkey=hk, role="demand", composite_efficiency=2.0
-            )
+            await _seed_score(session, hotkey=hk, role="demand", composite_efficiency=2.0)
             await session.commit()
 
             window_rows = await list_scores_in_window(session, window=2)
@@ -445,12 +413,8 @@ async def test_dual_role_same_hotkey_aggregates_finite(
     async with app.router.lifespan_context(app):
         database = app.state.database
         async with database.session() as session:
-            await _seed_score(
-                session, hotkey=dual, role="demand", composite_efficiency=4.0
-            )
-            await _seed_score(
-                session, hotkey=dual, role="supply", composite_efficiency=6.0
-            )
+            await _seed_score(session, hotkey=dual, role="demand", composite_efficiency=4.0)
+            await _seed_score(session, hotkey=dual, role="supply", composite_efficiency=6.0)
             await session.commit()
 
             aggregates = await compute_raw_weights(session, hyper=hyper)
@@ -499,9 +463,7 @@ async def test_leaderboard_lists_composite_aggregates_descending(
             await session.commit()
 
         transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as client:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             resp = await client.get("/v1/leaderboard")
             assert resp.status_code == 200, resp.text
             items = resp.json()["items"]

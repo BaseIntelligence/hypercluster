@@ -25,9 +25,7 @@ RENTER_HK = "cross-mra-renter-hotkey-bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 RENTER2_HK = "cross-mra-renter2-hotkey-cccccccccccccccccccccccccc"
 JOB_HK = "cross-mra-job-hotkey-dddddddddddddddddddddddddddddddd"
 
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 
 CROSS_MARKET_RESILIENCE = "cross-market-resilience-auth"
 
@@ -252,9 +250,7 @@ def run_cross_double_rent_recover(
             lease1 = (rent1.json() or {}).get("lease") or {}
             lease1_id = lease1.get("id")
             if not lease1_id:
-                return _fail(
-                    name, normalized, f"rent1 missing lease: {rent1.text}", steps, None
-                )
+                return _fail(name, normalized, f"rent1 missing lease: {rent1.text}", steps, None)
             if lease1.get("status") not in {"active", "requested"}:
                 return _fail(
                     name,
@@ -287,9 +283,7 @@ def run_cross_double_rent_recover(
                     None,
                 )
             code = _detail_code(double.json())
-            steps.append(
-                f"double-rent rejected HTTP {double.status_code} code={code}"
-            )
+            steps.append(f"double-rent rejected HTTP {double.status_code} code={code}")
             if code is not None and code not in _CONFLICT_CODES:
                 # Soft check: some deployments only expose status; unknown codes still OK
                 # as long as dual active lease does not form.
@@ -352,8 +346,7 @@ def run_cross_double_rent_recover(
                         None,
                     )
             steps.append(
-                f"terminate ok lease_id={lease1_id} "
-                f"status={term_lease.get('status', 'terminal')}"
+                f"terminate ok lease_id={lease1_id} status={term_lease.get('status', 'terminal')}"
             )
 
             # Capitalist second path: re-list same node, rent with renter2.
@@ -404,9 +397,7 @@ def run_cross_double_rent_recover(
                 f"second rent ok lease_id={lease3_id} status={lease3.get('status')} "
                 f"offer_id={offer2_id}"
             )
-            steps.append(
-                "VAL-CROSS-010 ok: double-rent reject then second offer success path"
-            )
+            steps.append("VAL-CROSS-010 ok: double-rent reject then second offer success path")
 
     except httpx.HTTPError as exc:
         return _fail(name, normalized, f"HTTP client error: {exc}", steps, None)
@@ -515,9 +506,7 @@ def run_cross_idle_rental_protection(
             lease_id = lease.get("id")
             pod_id = pod.get("id")
             if not lease_id or not pod_id:
-                return _fail(
-                    name, normalized, f"rent missing lease/pod: {rent.text}", steps, None
-                )
+                return _fail(name, normalized, f"rent missing lease/pod: {rent.text}", steps, None)
             steps.append(
                 f"rent ok lease_id={lease_id} status={lease.get('status')} "
                 f"pod_id={pod_id} pod_status={pod.get('status')}"
@@ -591,10 +580,7 @@ def run_cross_idle_rental_protection(
                 return _fail(
                     name,
                     normalized,
-                    (
-                        "active pod harmed by idle-only reclaim: "
-                        f"status={pod_after.get('status')}"
-                    ),
+                    (f"active pod harmed by idle-only reclaim: status={pod_after.get('status')}"),
                     steps,
                     None,
                 )
@@ -631,15 +617,11 @@ def run_cross_idle_rental_protection(
                     steps,
                     None,
                 )
-            steps.append(
-                f"rented node protected status={rented_status} (short-circuit ok)"
-            )
+            steps.append(f"rented node protected status={rented_status} (short-circuit ok)")
 
             free_after = client.get(f"{normalized}/v1/nodes/{free_node_id}")
             free_status = (
-                (free_after.json() or {}).get("status")
-                if free_after.status_code == 200
-                else None
+                (free_after.json() or {}).get("status") if free_after.status_code == 200 else None
             )
             if free_status == "offline":
                 steps.append(
@@ -654,9 +636,7 @@ def run_cross_idle_rental_protection(
                     "(tenant protection independent of free-node reclaim)"
                 )
 
-            steps.append(
-                "VAL-CROSS-011 ok: active rental survived idle-only reclaim sweep"
-            )
+            steps.append("VAL-CROSS-011 ok: active rental survived idle-only reclaim sweep")
 
     except httpx.HTTPError as exc:
         return _fail(name, normalized, f"HTTP client error: {exc}", steps, None)
@@ -666,8 +646,7 @@ def run_cross_idle_rental_protection(
         ok=True,
         base_url=normalized,
         message=(
-            "idle rental protection passed: active lease/pod survived "
-            "idle reclaim short-circuit"
+            "idle rental protection passed: active lease/pod survived idle reclaim short-circuit"
         ),
         steps=steps,
         identity=None,
@@ -722,9 +701,7 @@ def run_cross_nonce_replay_refuse(
             job_payload = first_job.json() if isinstance(first_job.json(), dict) else {}
             job_id = job_payload.get("id") or job_payload.get("job_id")
             if not job_id:
-                return _fail(
-                    name, normalized, f"job create missing id: {job_payload}", steps, None
-                )
+                return _fail(name, normalized, f"job create missing id: {job_payload}", steps, None)
             steps.append(f"job create ok job_id={job_id}")
 
             steps.append("job nonce replay (identical signed headers)")
@@ -751,9 +728,7 @@ def run_cross_nonce_replay_refuse(
                     None,
                 )
             jcode = _detail_code(replay_job.json())
-            steps.append(
-                f"job nonce replay refused HTTP {replay_job.status_code} code={jcode}"
-            )
+            steps.append(f"job nonce replay refused HTTP {replay_job.status_code} code={jcode}")
 
             listed_jobs = client.get(
                 f"{normalized}/v1/jobs",
@@ -872,9 +847,7 @@ def run_cross_nonce_replay_refuse(
                         None,
                     )
             rcode = _detail_code(replay_rent.json()) if replay_rent.content else None
-            steps.append(
-                f"rent nonce replay refused HTTP {replay_rent.status_code} code={rcode}"
-            )
+            steps.append(f"rent nonce replay refused HTTP {replay_rent.status_code} code={rcode}")
 
             after = _count_active_leases_for_offer(
                 client, normalized, offer_id=offer_id, hotkey=RENTER_HK
@@ -887,12 +860,8 @@ def run_cross_nonce_replay_refuse(
                     steps,
                     None,
                 )
-            steps.append(
-                f"lease count stable after rent nonce replay: count={after}"
-            )
-            steps.append(
-                "VAL-CROSS-024 ok: nonce replay cannot double-create jobs or double-rent"
-            )
+            steps.append(f"lease count stable after rent nonce replay: count={after}")
+            steps.append("VAL-CROSS-024 ok: nonce replay cannot double-create jobs or double-rent")
 
     except httpx.HTTPError as exc:
         return _fail(name, normalized, f"HTTP client error: {exc}", steps, None)
@@ -902,8 +871,7 @@ def run_cross_nonce_replay_refuse(
         ok=True,
         base_url=normalized,
         message=(
-            "nonce replay refuse passed: job+rent identical nonce rejected; "
-            "resource counts stable"
+            "nonce replay refuse passed: job+rent identical nonce rejected; resource counts stable"
         ),
         steps=steps,
         identity=None,
@@ -921,9 +889,7 @@ def run_cross_market_resilience_auth(
     steps: list[str] = []
     normalized = base_url.rstrip("/")
 
-    double = run_cross_double_rent_recover(
-        base_url, timeout=timeout, shared_token=shared_token
-    )
+    double = run_cross_double_rent_recover(base_url, timeout=timeout, shared_token=shared_token)
     steps.extend(double.steps)
     if not double.ok:
         return ScenarioResult(
@@ -935,9 +901,7 @@ def run_cross_market_resilience_auth(
             identity=None,
         )
 
-    idle = run_cross_idle_rental_protection(
-        base_url, timeout=timeout, shared_token=shared_token
-    )
+    idle = run_cross_idle_rental_protection(base_url, timeout=timeout, shared_token=shared_token)
     steps.extend(idle.steps)
     if not idle.ok:
         return ScenarioResult(
@@ -949,9 +913,7 @@ def run_cross_market_resilience_auth(
             identity=None,
         )
 
-    nonce = run_cross_nonce_replay_refuse(
-        base_url, timeout=timeout, shared_token=shared_token
-    )
+    nonce = run_cross_nonce_replay_refuse(base_url, timeout=timeout, shared_token=shared_token)
     steps.extend(nonce.steps)
     if not nonce.ok:
         return ScenarioResult(

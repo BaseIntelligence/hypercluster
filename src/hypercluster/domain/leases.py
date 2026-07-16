@@ -173,10 +173,7 @@ async def rent_offer(
         if float(offer.price_per_hour) > bound:
             raise LeaseError(
                 "price_over_renter_max",
-                (
-                    f"offer price_per_hour {offer.price_per_hour} "
-                    f"exceeds renter max_price {bound}"
-                ),
+                (f"offer price_per_hour {offer.price_per_hour} exceeds renter max_price {bound}"),
                 status_code=422,
             )
 
@@ -340,9 +337,7 @@ async def list_leases(
     if status:
         stmt = stmt.where(Lease.status == status)
     # Join through providers for provider-view; also match renter_hotkey.
-    provider_result = await session.execute(
-        select(Provider.id).where(Provider.hotkey == hotkey)
-    )
+    provider_result = await session.execute(select(Provider.id).where(Provider.hotkey == hotkey))
     provider_ids = [row[0] for row in provider_result.all()]
     if provider_ids:
         stmt = stmt.where(

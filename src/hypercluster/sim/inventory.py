@@ -113,9 +113,7 @@ def _build_sim_node(
     report = build_fabric_report(
         node_id=node_id,
         collected_at=when,
-        ib_devices=synthetic_ib_devices(
-            node_index=index, count=1, rate_gbps=rate_gbps
-        ),
+        ib_devices=synthetic_ib_devices(node_index=index, count=1, rate_gbps=rate_gbps),
         gpu_gpu_topo_matrix=matrix,
         numa_map={f"gpu{g}": g % 2 for g in range(gpus_per_node)},
         nccl_version="sim-2.21.5",
@@ -189,9 +187,7 @@ def seed_sim_inventory(
         "nvlink_edges": nvlink_edges,
         "report_digests": [x.fabric_report.report_digest for x in nodes],
     }
-    graph_digest = DIGEST_PREFIX + hashlib.sha256(
-        canonical_json(graph_body).encode()
-    ).hexdigest()
+    graph_digest = DIGEST_PREFIX + hashlib.sha256(canonical_json(graph_body).encode()).hexdigest()
 
     return SimInventory(
         nodes=nodes,

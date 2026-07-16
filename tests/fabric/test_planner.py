@@ -297,12 +297,7 @@ def test_planner_version_and_graph_digest_stable() -> None:
 def test_nccl_env_v1_fixture_parity() -> None:
     """VAL-FAB-020: golden nccl_env.v1 keys/critical values match fixture."""
 
-    fixture_path = (
-        Path(__file__).resolve().parents[1]
-        / "fixtures"
-        / "fabric"
-        / "nccl_env.v1.json"
-    )
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "fabric" / "nccl_env.v1.json"
     assert fixture_path.is_file(), f"missing golden fixture {fixture_path}"
     golden = json.loads(fixture_path.read_text(encoding="utf-8"))
 
@@ -378,9 +373,7 @@ def test_nvlink_only_prefers_intra_node_dense_gpus() -> None:
     assert result.ok is True
     node_ids = {b.node_id for b in result.rankmap}
     assert node_ids == {"dense-nvlink"}
-    assert result.nccl_env.get("NCCL_P2P_LEVEL") == "NVL" or result.nccl_env.get(
-        "NCCL_NET"
-    ) != "IB"
+    assert result.nccl_env.get("NCCL_P2P_LEVEL") == "NVL" or result.nccl_env.get("NCCL_NET") != "IB"
 
 
 def test_place_ranks_fails_closed_when_capacity_insufficient() -> None:

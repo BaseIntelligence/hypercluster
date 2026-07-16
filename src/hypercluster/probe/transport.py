@@ -149,14 +149,10 @@ def build_pass_script(
         ug = gpu.get("util_gpu", 0.0)
         um = gpu.get("util_mem", 0.0)
         clocks = gpu.get("clocks_sm_mhz", 0.0)
-        query_lines.append(
-            f"{name}, {uuid}, {mem}, {driver}, {pl}, {pd}, {ug}, {um}, {clocks}"
-        )
+        query_lines.append(f"{name}, {uuid}, {mem}, {driver}, {pl}, {pd}, {ug}, {um}, {clocks}")
 
     docker_info = {
-        "Runtimes": {
-            rt: {} for rt in inv["docker"].get("runtimes", ["runc", "nvidia"])
-        },
+        "Runtimes": {rt: {} for rt in inv["docker"].get("runtimes", ["runc", "nvidia"])},
         "Name": "fake-host",
     }
 

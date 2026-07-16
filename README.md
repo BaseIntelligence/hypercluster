@@ -13,6 +13,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.12-blue.svg)](pyproject.toml)
 [![Base SDK](https://img.shields.io/badge/base%20sdk-3.1.2-informational.svg)](https://github.com/BaseIntelligence/base)
+[![CI](https://github.com/BaseIntelligence/hypercluster/actions/workflows/ci.yml/badge.svg)](https://github.com/BaseIntelligence/hypercluster/actions/workflows/ci.yml)
 
 </div>
 
@@ -118,14 +119,18 @@ Copy `.env.example` for `CHALLENGE_*` / `HYPER_*` knobs. Never commit tokens.
 
 ## Validation quick reference
 
-Default gates are local only (unit, integration, sim). They never auto-load commercial cloud credentials.
+Default gates are local only (unit, integration, sim). They never auto-load commercial cloud credentials. GitHub Actions runs the same quality bar (lint, format, mypy, no-verda fence, pytest with coverage, Docker build/publish) on every push; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ```bash
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy
-uv run pytest -q
+uv run python scripts/check_no_verda.py
+uv run pytest -q -m "not live_verda and not integration" --cov=hypercluster --cov-fail-under=70
 uv run hypercluster sim doctor --offline
 uv run hypercluster sim run-scenario --name smoke --url http://127.0.0.1:3200
+# Offline-friendly image builds: stage the Base wheel first
+bash scripts/stage_base_wheel.sh && docker build -t hypercluster:local .
 ```
 
 Canonical sim scenario order: `smoke` → `marketplace` → `nccl` → `tee-offline` → `weights`.

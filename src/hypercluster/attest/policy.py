@@ -17,9 +17,7 @@ class TeeVerifyPolicy:
 
     compose_allowlist: frozenset[str] = field(default_factory=frozenset)
     tcb_enforce: bool = True
-    acceptable_tcb_statuses: frozenset[str] = field(
-        default_factory=lambda: frozenset({"UpToDate"})
-    )
+    acceptable_tcb_statuses: frozenset[str] = field(default_factory=lambda: frozenset({"UpToDate"}))
     disallowed_advisory_ids: frozenset[str] = field(default_factory=frozenset)
 
     def is_compose_allowed(self, compose_hash: str | None) -> bool:

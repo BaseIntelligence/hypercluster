@@ -89,12 +89,16 @@ def probe_identity_gates(
                     errors.append(f"health HTTP {health_resp.status_code}")
                 if isinstance(health_body, dict):
                     health_status = str(health_body.get("status", ""))
-                    slug = health_body.get("slug") if isinstance(
-                        health_body.get("slug"), str
-                    ) else None
-                    role = health_body.get("role") if isinstance(
-                        health_body.get("role"), str
-                    ) else None
+                    slug = (
+                        health_body.get("slug")
+                        if isinstance(health_body.get("slug"), str)
+                        else None
+                    )
+                    role = (
+                        health_body.get("role")
+                        if isinstance(health_body.get("role"), str)
+                        else None
+                    )
                     version = (
                         str(health_body["version"])
                         if health_body.get("version") is not None

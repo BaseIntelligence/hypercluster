@@ -253,9 +253,10 @@ def test_sim_report_digest_stable_independent_of_builtin_hash() -> None:
     # Adversarial hash was installed; code must not have relied on it for
     # digest-bearing fields. Prefer zero hash() on node_id; allow incidental
     # hash use only if digests still match (assertion above is the gate).
-    assert _stable_node_index(node_id) == int(
-        hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:8], 16
-    ) % 1000
+    assert (
+        _stable_node_index(node_id)
+        == int(hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:8], 16) % 1000
+    )
     # Tile: IB guid/index fields match stable derivation (not randomized).
     expected_index = _stable_node_index(node_id)
     assert first.ib_devices
@@ -267,9 +268,7 @@ def test_sim_report_digest_stable_independent_of_builtin_hash() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fabric_scan_accepts_report_and_persists_digest(
-    settings_factory, tmp_path
-) -> None:
+async def test_fabric_scan_accepts_report_and_persists_digest(settings_factory, tmp_path) -> None:
     """VAL-FAB-018: fabric-scan inserts/updates fabric_reports for a sim node."""
 
     from hypercluster.db.database import Database
@@ -343,9 +342,7 @@ async def test_fabric_scan_accepts_report_and_persists_digest(
 
 
 @pytest.mark.asyncio
-async def test_fabric_scan_api_and_cli_surface(
-    settings_factory, tmp_path
-) -> None:
+async def test_fabric_scan_api_and_cli_surface(settings_factory, tmp_path) -> None:
     """VAL-FAB-018: POST fabric-scan + CLI wrap produce accepted dashboard report."""
 
     import json as _json

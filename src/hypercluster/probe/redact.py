@@ -19,9 +19,7 @@ _PEM_BLOCK_SSH_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _SINGLE_LINE_BEGIN = re.compile(r"-----BEGIN[^\n]*PRIVATE KEY-----", re.IGNORECASE)
-_PASSWORD_ASSIGN = re.compile(
-    r"(?i)\b(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+"
-)
+_PASSWORD_ASSIGN = re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+")
 
 # Keys that must never appear in evidence JSON (case-insensitive match on key names).
 _FORBIDDEN_KEY_SUBSTR = (

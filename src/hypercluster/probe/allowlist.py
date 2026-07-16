@@ -54,7 +54,7 @@ class CommandSpec:
             if p == "":
                 continue
             # Quote when whitespace / metachar present; still only constant registry strings.
-            if any(ch in p for ch in (' ', '"', "'", "$", "`", "\\", "\n", ";")):
+            if any(ch in p for ch in (" ", '"', "'", "$", "`", "\\", "\n", ";")):
                 parts.append("'" + p.replace("'", "'\"'\"'") + "'")
             else:
                 parts.append(p)

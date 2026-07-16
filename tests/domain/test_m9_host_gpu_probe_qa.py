@@ -66,11 +66,7 @@ def test_product_tree_still_free_of_verda_client() -> None:
         # Comments may mention the ban; forbid live URL literals that look like clients.
         for line in text.splitlines():
             stripped = line.strip()
-            if (
-                stripped.startswith("#")
-                or stripped.startswith('"""')
-                or stripped.startswith("'''")
-            ):
+            if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
                 continue
             if "api.verda.com" not in stripped:
                 continue
@@ -90,8 +86,10 @@ def test_fake_host_probe_pass_all_status(host_probe_mod: ModuleType) -> None:
     fx = get_fixture("pass_all")
     transport = FakeSshTransport(scripted=fx.scripted)
     # Fixture bank uses its own claim family; align claim to fixture.
-    claimed = fx.claimed if fx.claimed is not None else ClaimedInventory(
-        gpu_model="1V100.6V", gpu_count=1
+    claimed = (
+        fx.claimed
+        if fx.claimed is not None
+        else ClaimedInventory(gpu_model="1V100.6V", gpu_count=1)
     )
     ctx = GpuProbeContext(
         node_id="node-m9-offline",
@@ -104,9 +102,10 @@ def test_fake_host_probe_pass_all_status(host_probe_mod: ModuleType) -> None:
     public = evidence.to_public()
     assert public["status"] == "passed"
     measured_name = public["measured"]["gpus"][0]["name"]
-    assert models_match(claimed.gpu_model, measured_name) or normalize_gpu_model(
-        measured_name
-    ) is not None
+    assert (
+        models_match(claimed.gpu_model, measured_name)
+        or normalize_gpu_model(measured_name) is not None
+    )
     assert normalize_gpu_model(measured_name) is not None
     host_probe = {
         "status": public["status"],

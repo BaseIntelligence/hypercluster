@@ -155,8 +155,7 @@ def test_cli_health_nonzero_when_status_unhealthy() -> None:
         != 0
     )
     assert (
-        _evaluate_health_payload({"status": "degraded", "slug": "hypercluster", "ready": True})
-        != 0
+        _evaluate_health_payload({"status": "degraded", "slug": "hypercluster", "ready": True}) != 0
     )
 
 

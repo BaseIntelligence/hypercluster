@@ -34,9 +34,7 @@ PROVIDER_HK = "cross-wdp-provider-hotkey-aaaaaaaaaaaaaaaaaaaaaaaa"
 DEMAND_HK = "cross-wdp-demand-hotkey-bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 CHEAT_HK = "cross-wdp-cheat-hotkey-cccccccccccccccccccccccccccc"
 
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 
 CROSS_WORKER_DURABILITY = "cross-worker-durability-paths"
 
@@ -79,22 +77,18 @@ def check_port_band_discipline(base_url: str) -> tuple[bool, list[str]]:
         ok = False
     elif not is_mission_port(port):
         steps.append(
-            f"base_url port {port} outside mission band "
-            f"{MIN_MISSION_PORT}–{MAX_MISSION_PORT}"
+            f"base_url port {port} outside mission band {MIN_MISSION_PORT}–{MAX_MISSION_PORT}"
         )
         ok = False
     else:
-        steps.append(
-            f"base_url port {port} in mission band {MIN_MISSION_PORT}–{MAX_MISSION_PORT}"
-        )
+        steps.append(f"base_url port {port} in mission band {MIN_MISSION_PORT}–{MAX_MISSION_PORT}")
     steps.append(
         f"documented multi-component defaults: "
         f"API={DEFAULT_BAREMETAL_PORT} mock-master={DEFAULT_MOCK_MASTER_PORT} "
         f"(sim/reserved 3202–3203)"
     )
     steps.append(
-        f"port band discipline {'ok' if ok else 'FAIL'}: "
-        f"{MIN_MISSION_PORT}–{MAX_MISSION_PORT}"
+        f"port band discipline {'ok' if ok else 'FAIL'}: {MIN_MISSION_PORT}–{MAX_MISSION_PORT}"
     )
     return ok, steps
 
@@ -375,12 +369,8 @@ def run_cross_combined_worker_full_path(
                     None,
                 )
             if terminal.get("finished_at") is None:
-                return _fail(
-                    name, normalized, "succeeded job missing finished_at", steps, None
-                )
-            steps.append(
-                "combined worker single-process full path: place/launch/score → succeeded"
-            )
+                return _fail(name, normalized, "succeeded job missing finished_at", steps, None)
+            steps.append("combined worker single-process full path: place/launch/score → succeeded")
     except httpx.HTTPError as exc:
         return _fail(name, normalized, f"HTTP error: {exc}", steps, None)
 
@@ -491,9 +481,10 @@ def run_cross_timeout_non_success(
             )
             # Hard check: job must not be scored as correctness 1
             for row in timeout_rows:
-                if float(row.get("correctness") or 0) >= 1.0 and float(
-                    row.get("composite") or 0
-                ) > 0:
+                if (
+                    float(row.get("correctness") or 0) >= 1.0
+                    and float(row.get("composite") or 0) > 0
+                ):
                     return _fail(
                         name,
                         normalized,
@@ -807,9 +798,7 @@ def run_cross_integrity_fail_stops_reward(
                     steps,
                     None,
                 )
-            steps.append(
-                "integrity fail mid chain stops reward: composite0 + weights mass 0"
-            )
+            steps.append("integrity fail mid chain stops reward: composite0 + weights mass 0")
     except httpx.HTTPError as exc:
         return _fail(name, normalized, f"HTTP error: {exc}", steps, None)
 
@@ -834,9 +823,7 @@ def run_cross_drain_ready_503(
 
     name = "cross-drain-ready-503"
     normalized = base_url.rstrip("/")
-    steps: list[str] = [
-        "VAL-CROSS-026 ready 503 during drain; finishes in-flight; rejects admits"
-    ]
+    steps: list[str] = ["VAL-CROSS-026 ready 503 during drain; finishes in-flight; rejects admits"]
     secret = _resolve_secret(shared_token)
 
     try:
@@ -871,9 +858,7 @@ def run_cross_drain_ready_503(
                 return _fail(name, normalized, err or "inflight job missing", steps, None)
 
             # Enter drain.
-            drain = client.post(
-                f"{normalized}/v1/sim/drain", json={"draining": True}
-            )
+            drain = client.post(f"{normalized}/v1/sim/drain", json={"draining": True})
             if drain.status_code >= 400:
                 return _fail(
                     name,
@@ -938,17 +923,11 @@ def run_cross_drain_ready_503(
             if reject.status_code != 503 and code != "runtime_not_ready":
                 # Some auth paths may 401 if middleware short-circuits differently;
                 # require no job id created: insist 4xx/5xx without success.
-                steps.append(
-                    f"new admit non-2xx HTTP {reject.status_code} code={code}"
-                )
+                steps.append(f"new admit non-2xx HTTP {reject.status_code} code={code}")
             else:
-                steps.append(
-                    f"new admit rejected HTTP {reject.status_code} code={code}"
-                )
+                steps.append(f"new admit rejected HTTP {reject.status_code} code={code}")
             if reject.status_code < 400:
-                return _fail(
-                    name, normalized, "admit succeeded while draining", steps, None
-                )
+                return _fail(name, normalized, "admit succeeded while draining", steps, None)
 
             # In-flight should still complete under combined worker.
             terminal = _poll_job(
@@ -970,9 +949,7 @@ def run_cross_drain_ready_503(
                 )
 
             # Leave drain.
-            leave = client.post(
-                f"{normalized}/v1/sim/drain", json={"draining": False}
-            )
+            leave = client.post(f"{normalized}/v1/sim/drain", json={"draining": False})
             steps.append(f"drain cleared HTTP {leave.status_code}")
             # Ready should recover.
             deadline = time.time() + 5.0
@@ -988,9 +965,7 @@ def run_cross_drain_ready_503(
                     name, normalized, "ready did not recover after leave drain", steps, None
                 )
             steps.append("ready recovered 200 after leave drain")
-            steps.append(
-                "drain semantics ok: ready 503 + admit reject + in-flight finished"
-            )
+            steps.append("drain semantics ok: ready 503 + admit reject + in-flight finished")
     except httpx.HTTPError as exc:
         return _fail(name, normalized, f"HTTP error: {exc}", steps, None)
 

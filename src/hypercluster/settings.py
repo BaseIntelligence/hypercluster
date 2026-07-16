@@ -73,13 +73,11 @@ class HyperSettings(BaseSettings):
     tee_acceptable_tcb: str = Field(default="UpToDate")
     tee_disallowed_advisories: str = Field(default="")
     compose_hash_allowlist: str = Field(
-        default=(
-            "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
-        ),
+        default=("sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"),
     )
     weight_push_interval_s: float = Field(default=120.0, ge=1.0)
     # Raw-weight push to Base master / mock-master (VAL-SCORE-013..015/023/030).
-    # Env: HYPER_MASTER_BASE_URL (e.g. http://127.0.0.1:3201),  
+    # Env: HYPER_MASTER_BASE_URL (e.g. http://127.0.0.1:3201),
     # HYPER_WEIGHT_PUSH_ENABLED, HYPER_WEIGHT_PUSH_FRESHNESS_S, HYPER_EPOCH_SECONDS.
     master_base_url: str | None = Field(default=None)
     weight_push_enabled: bool = True

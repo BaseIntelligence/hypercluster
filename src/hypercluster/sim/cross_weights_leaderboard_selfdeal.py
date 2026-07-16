@@ -42,9 +42,7 @@ MINER_C = "5crossWLsCcccccccccccccccccccccccccccccccccccccccccc"
 SELF_DEAL_HK = "5crossWLsSeLfDeaLHotkeyaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 TWIN_HONEST_HK = "5crossWLsTwinHonestHotkeyaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
 
 
 def _resolve_secret(shared_token: str | None) -> str:
@@ -273,9 +271,7 @@ async def _seed_multi_miner_and_self_deal(
                 "self_deal": False,
             },
         ]
-        score_ids = await _seed_score_rows(
-            database, hyper=hyper, rows=multi + self_deal_rows
-        )
+        score_ids = await _seed_score_rows(database, hyper=hyper, rows=multi + self_deal_rows)
         weights = await load_raw_weights(database=database, hyper=hyper)
         return {
             "ok": True,
@@ -472,8 +468,7 @@ def run_cross_weight_push_ack(
         ok=True,
         base_url=normalized,
         message=(
-            "weight push after scored chain: mock-master acked; "
-            "finite map in push + weight-preview"
+            "weight push after scored chain: mock-master acked; finite map in push + weight-preview"
         ),
         steps=steps,
     )
@@ -531,9 +526,7 @@ def run_cross_leaderboard_weights_agree(
                     )
                 items = sc.json().get("items") or []
                 if not items:
-                    return _fail(
-                        name, normalized, f"missing scores for {hk}", steps, None
-                    )
+                    return _fail(name, normalized, f"missing scores for {hk}", steps, None)
                 composite = float(items[0].get("composite") or 0.0)
                 score_comps[hk] = composite
                 steps.append(f"score {hk} composite={composite}")
@@ -566,8 +559,7 @@ def run_cross_leaderboard_weights_agree(
             our_positions = [
                 str(row["hotkey"])
                 for row in items
-                if isinstance(row, dict)
-                and row.get("hotkey") in {MINER_A, MINER_B, MINER_C}
+                if isinstance(row, dict) and row.get("hotkey") in {MINER_A, MINER_B, MINER_C}
             ]
             steps.append(f"leaderboard our_order={our_positions}")
             if our_positions[:3] != [MINER_A, MINER_B, MINER_C] and our_positions != [
@@ -583,9 +575,7 @@ def run_cross_leaderboard_weights_agree(
                         our_positions.index(MINER_C),
                     )
                 except ValueError as exc:
-                    return _fail(
-                        name, normalized, f"hotkey missing: {exc}", steps, None
-                    )
+                    return _fail(name, normalized, f"hotkey missing: {exc}", steps, None)
                 if not (ia < ib < ic):
                     return _fail(
                         name,
@@ -596,10 +586,7 @@ def run_cross_leaderboard_weights_agree(
                     )
 
             # Aggregates monotone
-            agg = {
-                str(row["hotkey"]): float(row.get("aggregate") or 0.0)
-                for row in ranked
-            }
+            agg = {str(row["hotkey"]): float(row.get("aggregate") or 0.0) for row in ranked}
             if not (agg[MINER_A] > agg[MINER_B] > agg[MINER_C] > 0):
                 return _fail(
                     name,
@@ -653,9 +640,7 @@ def run_cross_leaderboard_weights_agree(
                     steps,
                     None,
                 )
-            steps.append(
-                f"weights agree A={wa} B={wb} C={wc}; top={top_hk} weight={top_w}"
-            )
+            steps.append(f"weights agree A={wa} B={wb} C={wc}; top={top_hk} weight={top_w}")
             # Hotkey set agreement: each scored miner present in weights with >0.
             for hk in (MINER_A, MINER_B, MINER_C):
                 if hk not in wmap or float(wmap[hk]) <= 0:
@@ -760,9 +745,7 @@ def run_cross_self_deal_finite_damped(
                         steps,
                         None,
                     )
-            steps.append(
-                f"self-deal score rows={len(items)} roles={sorted(roles)} finite"
-            )
+            steps.append(f"self-deal score rows={len(items)} roles={sorted(roles)} finite")
 
             preview = client.get(f"{normalized}/v1/weight-preview")
             if preview.status_code != 200:
@@ -950,10 +933,7 @@ def run_cross_mock_master_down_resilience(
     # Allowed non-success statuses for chaos: transport, discarded, rejected, failed.
     if down_push.get("status") in {"acknowledged"} and stop_master_fn is not None:
         return _fail(name, normalized, "unexpected acked during down", steps, None)
-    steps.append(
-        f"push non-acked as expected under chaos "
-        f"(status={down_push.get('status')})"
-    )
+    steps.append(f"push non-acked as expected under chaos (status={down_push.get('status')})")
 
     # Scores must still be present (no soft-delete on push fail).
     try:
@@ -1023,8 +1003,7 @@ def run_cross_mock_master_down_resilience(
             # If reuse rejected (e.g. expired window), fall back to fresh push.
             if recovery.get("status") != "acknowledged":
                 steps.append(
-                    f"reuse push status={recovery.get('status')}; "
-                    "falling back to fresh epoch push"
+                    f"reuse push status={recovery.get('status')}; falling back to fresh epoch push"
                 )
                 recovery = _run_async(
                     lambda: _load_weights_and_push(
@@ -1119,9 +1098,7 @@ def check_mission_ports_labeled(base_url: str, master_url: str | None = None) ->
         f"API default/doc={DEFAULT_BAREMETAL_PORT} observed={api_port} "
         f"band={MIN_MISSION_PORT}-{MAX_MISSION_PORT}"
     )
-    steps.append(
-        f"mock-master default/doc={DEFAULT_MOCK_MASTER_PORT} observed={m_port}"
-    )
+    steps.append(f"mock-master default/doc={DEFAULT_MOCK_MASTER_PORT} observed={m_port}")
     if api_port is not None and not is_mission_port(api_port):
         steps.append(f"WARN: API port {api_port} outside mission band")
     if m_port is not None and not is_mission_port(m_port):
@@ -1188,8 +1165,7 @@ def run_cross_weights_leaderboard_selfdeal(
                 timeout=timeout,
             )
             steps.append(
-                f"retry push status={push.get('status')} "
-                f"push_status={push.get('push_status')}"
+                f"retry push status={push.get('status')} push_status={push.get('push_status')}"
             )
             if push.get("status") != "acknowledged":
                 return ScenarioResult(
@@ -1277,8 +1253,7 @@ def run_cross_weights_leaderboard_selfdeal(
         ok=True,
         base_url=normalized,
         message=(
-            "cross weights/leaderboard/selfdeal/master-chaos passed "
-            "(VAL-CROSS-012/019/020/027)"
+            "cross weights/leaderboard/selfdeal/master-chaos passed (VAL-CROSS-012/019/020/027)"
         ),
         steps=steps,
     )

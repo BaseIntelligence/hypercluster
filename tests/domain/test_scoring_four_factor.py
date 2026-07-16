@@ -47,9 +47,7 @@ def _job(*, hotkey: str, job_id: str | None = None) -> Job:
         id=job_id or str(uuid.uuid4()),
         submitter_hotkey=hotkey,
         status="succeeded",
-        image_digest=(
-            "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-        ),
+        image_digest=("sha256:sim000000000000000000000000000000000000000000000000000000000001"),
         entrypoint_json=json.dumps(["python", "-m", "train"]),
         world_size=1,
         nnodes=1,

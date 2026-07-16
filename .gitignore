@@ -22,3 +22,4 @@ docker/vendor/*.whl
 !docker/vendor/.gitkeep
 # Local documentation evidence (never publish)
 .docs-evidence/
+.coverage

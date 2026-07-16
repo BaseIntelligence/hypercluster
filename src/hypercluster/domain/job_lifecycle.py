@@ -315,18 +315,14 @@ async def get_attempt(
 
 async def list_attempts(session: AsyncSession, job_id: str) -> list[JobAttempt]:
     result = await session.execute(
-        select(JobAttempt)
-        .where(JobAttempt.job_id == job_id)
-        .order_by(JobAttempt.attempt_no.asc())
+        select(JobAttempt).where(JobAttempt.job_id == job_id).order_by(JobAttempt.attempt_no.asc())
     )
     return list(result.scalars().all())
 
 
 async def get_latest_attempt(session: AsyncSession, job_id: str) -> JobAttempt | None:
     result = await session.execute(
-        select(JobAttempt)
-        .where(JobAttempt.job_id == job_id)
-        .order_by(JobAttempt.attempt_no.desc())
+        select(JobAttempt).where(JobAttempt.job_id == job_id).order_by(JobAttempt.attempt_no.desc())
     )
     return result.scalars().first()
 
@@ -337,9 +333,7 @@ async def get_proofs_for_attempt(session: AsyncSession, attempt_id: str) -> list
 
 
 async def get_fabric_report(session: AsyncSession, job_id: str) -> JobFabricReport | None:
-    result = await session.execute(
-        select(JobFabricReport).where(JobFabricReport.job_id == job_id)
-    )
+    result = await session.execute(select(JobFabricReport).where(JobFabricReport.job_id == job_id))
     return result.scalar_one_or_none()
 
 
@@ -530,9 +524,7 @@ async def post_job_results(
                     id=str(uuid.uuid4()),
                     attempt_id=attempt.id,
                     proof_tier=tier,
-                    payload_json=json.dumps(
-                        {"result_digest": result_digest, "claimed_tier": tier}
-                    ),
+                    payload_json=json.dumps({"result_digest": result_digest, "claimed_tier": tier}),
                     verified=0,
                     verify_mode=mode if mode in {"offline_fixture", "live", "sim"} else "sim",
                     dstack_verdict_json=json.dumps(verdict),
@@ -581,13 +573,17 @@ async def post_job_results(
             job.finished_at = now
             job.failure_code = failure_code or terminal_status
         job.updated_at = now
-    elif job.status in {
-        JOB_STATUS_ADMITTED,
-        JOB_STATUS_PLACING,
-        JOB_STATUS_PROVISIONING,
-        JOB_STATUS_RUNNING,
-        JOB_STATUS_COLLECTING,
-    } and status == JOB_STATUS_SUCCEEDED:
+    elif (
+        job.status
+        in {
+            JOB_STATUS_ADMITTED,
+            JOB_STATUS_PLACING,
+            JOB_STATUS_PROVISIONING,
+            JOB_STATUS_RUNNING,
+            JOB_STATUS_COLLECTING,
+        }
+        and status == JOB_STATUS_SUCCEEDED
+    ):
         # Do not skip ranking; leave worker loop to finish if in mid-pipeline
         # but seal metrics on the attempt.
         pass
@@ -610,9 +606,7 @@ async def post_job_results(
         if failure_code in CHEAT_REASON_CODES:
             integrity_codes.append(failure_code)
     integrity_flag = (
-        (not verified)
-        or bool(metrics_for_score.get("integrity_fail"))
-        or bool(integrity_codes)
+        (not verified) or bool(metrics_for_score.get("integrity_fail")) or bool(integrity_codes)
     )
     if integrity_flag or status != "succeeded":
         try:
@@ -620,8 +614,8 @@ async def post_job_results(
 
             correctness = 0.0 if integrity_flag or status != "succeeded" else 1.0
             efficiency = float(metrics_for_score.get("efficiency", 0.0) or 0.0)
-            fabric_gate = 0.0 if integrity_flag else float(
-                metrics_for_score.get("fabric_gate", 1.0) or 1.0
+            fabric_gate = (
+                0.0 if integrity_flag else float(metrics_for_score.get("fabric_gate", 1.0) or 1.0)
             )
             await score_attempt_with_tee(
                 session,
@@ -756,10 +750,8 @@ async def _place_job(session: AsyncSession, job: Job) -> None:
                     )
                     if not cluster_eval.may_launch:
                         raise JobError(
-                            cluster_eval.failure_code
-                            or "cluster_fabric_reports_incomplete",
-                            cluster_eval.reason
-                            or "cluster requires FabricReports for all members",
+                            cluster_eval.failure_code or "cluster_fabric_reports_incomplete",
+                            cluster_eval.reason or "cluster requires FabricReports for all members",
                             status_code=409,
                         )
 
@@ -917,9 +909,7 @@ async def _collect_success(
     rankmap: list[dict[str, Any]] = list(placement.rankmap()) if placement is not None else []
     nccl_env: dict[str, str] = dict(placement.nccl_env()) if placement is not None else {}
     graph_digest = (placement.graph_digest if placement is not None else None) or ""
-    planner_version = (
-        placement.planner_version if placement is not None else PLANNER_VERSION
-    )
+    planner_version = placement.planner_version if placement is not None else PLANNER_VERSION
 
     reports: list[Any] = []
     if job.pod_id:
@@ -1070,8 +1060,12 @@ async def _collect_success(
         efficiency = 1.0
         if isinstance(metrics_blob.get("efficiency"), (int, float)):
             efficiency = float(metrics_blob["efficiency"])
-        fabric_gate = 0.0 if integrity_zero else float(
-            metrics_blob.get("fabric_gate", getattr(launch_result, "fabric_gate", 1.0)) or 1.0
+        fabric_gate = (
+            0.0
+            if integrity_zero
+            else float(
+                metrics_blob.get("fabric_gate", getattr(launch_result, "fabric_gate", 1.0)) or 1.0
+            )
         )
         await score_attempt_with_tee(
             session,
@@ -1085,8 +1079,7 @@ async def _collect_success(
             details={
                 "graph_digest": graph_digest,
                 "fabric_artifact_digest": launch_result.fabric_artifact_digest,
-                "fabric_report_digest": attempt.fabric_report_digest
-                or fab.get("report_digest"),
+                "fabric_report_digest": attempt.fabric_report_digest or fab.get("report_digest"),
                 "planner_version": planner_version,
                 "launcher_version": launch_result.launcher_version,
                 "rankmap_len": len(rankmap),
@@ -1205,9 +1198,7 @@ async def _collect_success(
         "launcher_version": launch_result.launcher_version,
         "rankmap_len": len(rankmap),
         "failure_code": launch_result.failure_code,
-        "integrity_codes": list(
-            (launch_result.score_factors or {}).get("reason_codes") or []
-        ),
+        "integrity_codes": list((launch_result.score_factors or {}).get("reason_codes") or []),
     }
     await score_attempt_with_tee(
         session,

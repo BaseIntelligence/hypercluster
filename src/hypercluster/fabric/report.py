@@ -68,8 +68,7 @@ def node_digest_entries(
             )
         else:
             dig = fallback.get(nid) or (
-                DIGEST_PREFIX
-                + hashlib.sha256(f"missing-report:{nid}".encode()).hexdigest()
+                DIGEST_PREFIX + hashlib.sha256(f"missing-report:{nid}".encode()).hexdigest()
             )
             entries.append(
                 {
@@ -88,9 +87,7 @@ def compute_bundle_digest(nodes: list[dict[str, Any]], *, job_id: str) -> str:
     body = {
         "bundle_version": BUNDLE_VERSION,
         "job_id": job_id,
-        "nodes": [
-            {"node_id": n["node_id"], "report_digest": n["report_digest"]} for n in nodes
-        ],
+        "nodes": [{"node_id": n["node_id"], "report_digest": n["report_digest"]} for n in nodes],
     }
     return DIGEST_PREFIX + hashlib.sha256(canonical_json(body).encode()).hexdigest()
 

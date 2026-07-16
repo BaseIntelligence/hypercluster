@@ -379,7 +379,9 @@ def test_port_bind_conflict_fails_visibly() -> None:
 
     bind_port = 3251
     env = os.environ.copy()
-    env["CHALLENGE_DATABASE_URL"] = f"sqlite+aiosqlite:////tmp/hypercluster-bind-{os.getpid()}.sqlite3"
+    env["CHALLENGE_DATABASE_URL"] = (
+        f"sqlite+aiosqlite:////tmp/hypercluster-bind-{os.getpid()}.sqlite3"
+    )
     env["CHALLENGE_SHARED_TOKEN"] = "bind-conflict-token"
     env["CHALLENGE_SHARED_TOKEN_FILE"] = ""
     env["CHALLENGE_PORT"] = str(bind_port)

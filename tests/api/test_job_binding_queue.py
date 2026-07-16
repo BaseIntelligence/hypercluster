@@ -462,9 +462,9 @@ async def test_cas_only_one_worker_claims_place_or_launch(tmp_path, settings_fac
         assert att1 is not None
         # No duplicate inventing pair of concurrent running rows.
         runningish = [a for a in attempts if a.status in {"running", "collecting"}]
-        assert len(runningish) <= 1 or all(
-            a.attempt_no == 1 for a in attempts
-        ), f"unexpected parallel attempts: {[(a.attempt_no, a.status) for a in attempts]}"
+        assert len(runningish) <= 1 or all(a.attempt_no == 1 for a in attempts), (
+            f"unexpected parallel attempts: {[(a.attempt_no, a.status) for a in attempts]}"
+        )
         assert len({a.attempt_no for a in attempts}) == len(attempts)
 
     await database.close()

@@ -168,9 +168,7 @@ def evaluate_ib_rate_consistency(reports: list[FabricReport]) -> IbRateConsisten
 
     graph_body = {
         "node_ids": [r.node_id for r in reports],
-        "rates": {
-            r.node_id: _node_rate(r) if has_active_ib_devices(r) else 0.0 for r in reports
-        },
+        "rates": {r.node_id: _node_rate(r) if has_active_ib_devices(r) else 0.0 for r in reports},
         "has_ib": {r.node_id: has_active_ib_devices(r) for r in reports},
         "policy": IB_RATE_MISMATCH_POLICY,
     }
@@ -186,10 +184,7 @@ def evaluate_ib_rate_consistency(reports: list[FabricReport]) -> IbRateConsisten
             graph_digest=graph_digest,
             min_rate=min(rates_clean) if rates_clean else None,
             max_rate=max(rates_clean) if rates_clean else None,
-            reason=(
-                "mixed zero-IB and IB nodes; fabric does not pretend eth node "
-                "as IB peer"
-            ),
+            reason=("mixed zero-IB and IB nodes; fabric does not pretend eth node as IB peer"),
             warning="zero_vs_nonzero_ib",
         )
 
@@ -447,16 +442,13 @@ def evaluate_require_ib_nodes(
             may_rent=False,
             missing_ib_node_ids=missing,
             reason=(
-                "require_ib offer blocked: node(s) lack active IB fabric: "
-                + ", ".join(missing)
+                "require_ib offer blocked: node(s) lack active IB fabric: " + ", ".join(missing)
             ),
             failure_code="require_ib_not_satisfied",
         )
 
     # Also reject if rates claim zero-vs-nonzero mixed (should not happen if has_ib).
-    consistency = evaluate_ib_rate_consistency(
-        [by_id[n] for n in node_ids if n in by_id]
-    )
+    consistency = evaluate_ib_rate_consistency([by_id[n] for n in node_ids if n in by_id])
     if not consistency.may_place_ib:
         return RequireIbCheck(
             ok=False,
@@ -618,9 +610,7 @@ def summarize_gate_for_score(
     if gate.composite_zeroed:
         public["fabric_gate"] = 0.0
         public["composite"] = 0.0
-    public["reason_codes"] = list(
-        dict.fromkeys([*gate.reason_codes, *breakdown.reason_codes])
-    )
+    public["reason_codes"] = list(dict.fromkeys([*gate.reason_codes, *breakdown.reason_codes]))
     return public
 
 

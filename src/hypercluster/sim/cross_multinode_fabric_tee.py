@@ -25,12 +25,8 @@ PROVIDER_HK = "cross-fabric-provider-hotkey-aaaaaaaaaaaaaaaaaaaaaaa"
 DEMAND_HK = "cross-fabric-demand-hotkey-bbbbbbbbbbbbbbbbbbbbbbbbbb"
 FOREIGN_HK = "cross-fabric-foreign-hotkey-cccccccccccccccccccccccc"
 
-ALLOWED_IMAGE = (
-    "sha256:sim000000000000000000000000000000000000000000000000000000000001"
-)
-COMPOSE_GOLDEN = (
-    "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
-)
+ALLOWED_IMAGE = "sha256:sim000000000000000000000000000000000000000000000000000000000001"
+COMPOSE_GOLDEN = "sha256:0c0ffeec0a5eabcdef0123456789abcdef0123456789abcdef0123456789ab"
 
 CROSS_MULTINODE = "cross-multinode-fabric-tee"
 
@@ -382,9 +378,7 @@ def _offline_quote_b64(*, job_id: str, nonce: str) -> str:
     from hypercluster.attest.policy import DEFAULT_COMPOSE_HASH_GOLDEN
     from hypercluster.attest.report_data import build_report_data
 
-    report = build_report_data(
-        job_id=job_id, image_digest=ALLOWED_IMAGE, nonce=nonce
-    )
+    report = build_report_data(job_id=job_id, image_digest=ALLOWED_IMAGE, nonce=nonce)
     env = make_offline_envelope(
         compose_hash=DEFAULT_COMPOSE_HASH_GOLDEN or COMPOSE_GOLDEN,
         expected_compose_hash=DEFAULT_COMPOSE_HASH_GOLDEN or COMPOSE_GOLDEN,
@@ -435,17 +429,13 @@ def _extract_placement_chain(
         _ = factors
 
     unique_nodes = {
-        str(b.get("node_id"))
-        for b in rankmap
-        if isinstance(b, dict) and b.get("node_id")
+        str(b.get("node_id")) for b in rankmap if isinstance(b, dict) and b.get("node_id")
     }
     return {
         "graph_digest": graph_digest,
         "rankmap_len": len(rankmap) if isinstance(rankmap, list) else 0,
         "unique_nodes": sorted(unique_nodes),
-        "launch_rankmap_len": len(launch.get("rankmap") or [])
-        if isinstance(launch, dict)
-        else 0,
+        "launch_rankmap_len": len(launch.get("rankmap") or []) if isinstance(launch, dict) else 0,
         "fabric_artifact_digest": fabric_artifact,
         "fabric_report_digest": report_digest,
         "attempt_fabric_report_digest": (attempt or {}).get("fabric_report_digest"),
@@ -564,9 +554,7 @@ def run_cross_multinode_success(
             rankmap = placement.get("rankmap") or []
             graph_digest = placement.get("graph_digest")
             unique_nodes = {
-                str(b.get("node_id"))
-                for b in rankmap
-                if isinstance(b, dict) and b.get("node_id")
+                str(b.get("node_id")) for b in rankmap if isinstance(b, dict) and b.get("node_id")
             }
             if len(rankmap) < 2:
                 return _fail(
@@ -674,8 +662,7 @@ def run_cross_multinode_success(
                     None,
                 )
             steps.append(
-                f"score fabric_gate={gate} composite={composite} "
-                f"tee_bonus={score.get('tee_bonus')}"
+                f"score fabric_gate={gate} composite={composite} tee_bonus={score.get('tee_bonus')}"
             )
 
             chain = _extract_placement_chain(job_detail, attempt, fabric_report, score)
@@ -904,19 +891,14 @@ def run_cross_multinode_fabric_fail(
             post = client.get(f"{normalized}/v1/weight-preview")
             post_w = 0.0
             if post.status_code == 200:
-                post_w = float(
-                    ((post.json() or {}).get("weights") or {}).get(DEMAND_HK) or 0.0
-                )
+                post_w = float(((post.json() or {}).get("weights") or {}).get(DEMAND_HK) or 0.0)
             steps.append(f"post-attempt demand weight={post_w}")
             # Weight must not inflate from this failing attempt alone.
             if post_w > pre_w + 1e-9:
                 return _fail(
                     CROSS_MULTINODE,
                     normalized,
-                    (
-                        "fail inject inflated weight mass: "
-                        f"pre={pre_w} post={post_w}"
-                    ),
+                    (f"fail inject inflated weight mass: pre={pre_w} post={post_w}"),
                     steps,
                     None,
                 )
@@ -936,10 +918,7 @@ def run_cross_multinode_fabric_fail(
         name=CROSS_MULTINODE,
         ok=True,
         base_url=normalized,
-        message=(
-            "cross-multinode fail inject: fabric_gate=0 composite=0 "
-            "weight mass not inflated"
-        ),
+        message=("cross-multinode fail inject: fabric_gate=0 composite=0 weight mass not inflated"),
         steps=steps,
         identity=None,
     )
@@ -1212,10 +1191,7 @@ def run_cross_tee_offline_bonus(
                     return _fail(
                         CROSS_MULTINODE,
                         normalized,
-                        (
-                            f"expected tee_bonus≈{tee_bonus_tdx} after offline "
-                            f"verify, got {tee_tdx}"
-                        ),
+                        (f"expected tee_bonus≈{tee_bonus_tdx} after offline verify, got {tee_tdx}"),
                         steps,
                         None,
                     )
@@ -1274,9 +1250,7 @@ def run_cross_tee_offline_bonus(
         name=CROSS_MULTINODE,
         ok=True,
         base_url=normalized,
-        message=(
-            "cross-tee twin: offline TDX bonus multiplies composite over tee=none"
-        ),
+        message=("cross-tee twin: offline TDX bonus multiplies composite over tee=none"),
         steps=steps,
         identity=None,
     )

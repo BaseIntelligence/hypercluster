@@ -141,9 +141,10 @@ def test_eth_mode_nccl_env_does_not_set_nccl_net_ib() -> None:
     assert "NCCL_IB_HCA" not in env
     assert env.get("HYPER_FABRIC_MODE") == "eth"
     # eth uses sockets
-    assert env.get("NCCL_NET") in {"Socket", "socket", "SOCKET", None} or env.get(
-        "NCCL_NET", ""
-    ).lower() != "ib"
+    assert (
+        env.get("NCCL_NET") in {"Socket", "socket", "SOCKET", None}
+        or env.get("NCCL_NET", "").lower() != "ib"
+    )
 
 
 def test_ib_mode_nccl_env_sets_net_ib_when_devices_present() -> None:
@@ -180,9 +181,7 @@ def test_forbidden_eth_fallback_under_ib_zeroes_fabric_gate() -> None:
     assert result.fabric_gate == 0.0
     assert result.composite_zeroed is True
     assert result.reason_codes
-    assert any(
-        "fallback" in c.lower() or "eth" in c.lower() for c in result.reason_codes
-    )
+    assert any("fallback" in c.lower() or "eth" in c.lower() for c in result.reason_codes)
 
 
 def test_honest_ib_run_gate_one() -> None:
@@ -236,9 +235,7 @@ def test_require_ib_rejects_eth_only_inventory() -> None:
     )
     assert check.ok is False
     assert check.may_rent is False
-    assert "a" in check.missing_ib_node_ids or any(
-        "a" in x for x in check.missing_ib_node_ids
-    )
+    assert "a" in check.missing_ib_node_ids or any("a" in x for x in check.missing_ib_node_ids)
 
 
 def test_require_ib_false_allows_eth() -> None:

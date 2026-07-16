@@ -26,6 +26,7 @@ Usage (ops shell)::
 
 Never commit tokens. Never leave instances running. Never set_weights.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -482,8 +483,7 @@ def main(argv: list[str] | None = None) -> int:
                 # Recompute class match vs original catalog claim; also stamp registered claim.
                 class_ok = bool(models_match(original_claim, measured_name)) or bool(
                     normalize_gpu_model(original_claim)
-                    and normalize_gpu_model(original_claim)
-                    == normalize_gpu_model(measured_name)
+                    and normalize_gpu_model(original_claim) == normalize_gpu_model(measured_name)
                 )
                 host_probe["claim_model_class_match"] = class_ok
                 host_probe["claimed_for_register"] = {

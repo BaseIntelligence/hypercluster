@@ -890,8 +890,7 @@ def public_relative_v1_routes(app: Any) -> list[str]:
         path = raw_path
         endpoint = getattr(route, "endpoint", None)
         if endpoint is not None and (
-            is_public_route(endpoint)
-            or getattr(endpoint, "__base_public_route__", False)
+            is_public_route(endpoint) or getattr(endpoint, "__base_public_route__", False)
         ):
             if path not in out:
                 out.append(path)

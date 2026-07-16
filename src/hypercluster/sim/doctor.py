@@ -121,9 +121,7 @@ def _check_inventory(backends: BackendChecks) -> None:
             f"digest={inv.graph_digest[:19]}…, plan_ready=true)"
         )
     except Exception as exc:  # noqa: BLE001 — doctor must never crash on check
-        backends.errors.append(
-            f"inventory backend actionable: seed failed: {exc!r}"
-        )
+        backends.errors.append(f"inventory backend actionable: seed failed: {exc!r}")
 
 
 def _check_launcher(backends: BackendChecks) -> None:
@@ -144,13 +142,10 @@ def _check_launcher(backends: BackendChecks) -> None:
             )
             return
         _ = (LaunchRequest, LaunchResult)
-        backends.backend_checks.append(
-            f"launcher: sim_launch importable ({LAUNCHER_VERSION})"
-        )
+        backends.backend_checks.append(f"launcher: sim_launch importable ({LAUNCHER_VERSION})")
     except Exception as exc:  # noqa: BLE001
         backends.errors.append(
-            "launcher backend actionable: failed to import fabric launcher "
-            f"(sim_launch): {exc!r}"
+            f"launcher backend actionable: failed to import fabric launcher (sim_launch): {exc!r}"
         )
 
 
@@ -217,13 +212,9 @@ def _check_mock_master_module(backends: BackendChecks) -> None:
                 "missing FastAPI app attribute"
             )
             return
-        backends.backend_checks.append(
-            "mock_master: module importable (optional live :3201)"
-        )
+        backends.backend_checks.append("mock_master: module importable (optional live :3201)")
     except Exception as exc:  # noqa: BLE001
-        backends.errors.append(
-            f"mock_master backend actionable: import failed: {exc!r}"
-        )
+        backends.errors.append(f"mock_master backend actionable: import failed: {exc!r}")
 
 
 def check_sim_backends() -> BackendChecks:

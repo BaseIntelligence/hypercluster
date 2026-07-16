@@ -177,9 +177,9 @@ def test_public_routes_decorated_internal_not_public(settings_factory) -> None:
     # Internal weights is present on the app but never public-decorated.
     route_paths = {getattr(r, "path", None) for r in _walk_routes(app.routes)}
     assert "/internal/v1/get_weights" in route_paths
-    assert not any(
-        path.startswith("/internal") for path in public_paths
-    ), f"internal paths leaked into public set: {public_paths}"
+    assert not any(path.startswith("/internal") for path in public_paths), (
+        f"internal paths leaked into public set: {public_paths}"
+    )
 
     # Explicit: get_weights endpoint callable is not public.
     for route in _walk_routes(app.routes):
@@ -332,9 +332,7 @@ async def test_unwritable_data_path_fails_readiness(
     try:
         async with app.router.lifespan_context(app):
             transport = ASGITransport(app=app)
-            async with AsyncClient(
-                transport=transport, base_url="http://testserver"
-            ) as client:
+            async with AsyncClient(transport=transport, base_url="http://testserver") as client:
                 ready_ok = await client.get("/ready")
                 assert ready_ok.status_code == 200
 
@@ -419,9 +417,7 @@ def test_scaffold_public_routes_use_public_route_decorator() -> None:
     from hypercluster.api import public as public_mod
 
     # Endpoints defined on the module must use the Base marker.
-    offers = getattr(public_mod, "offers_list", None) or getattr(
-        public_mod, "list_offers", None
-    )
+    offers = getattr(public_mod, "offers_list", None) or getattr(public_mod, "list_offers", None)
     jobs = getattr(public_mod, "list_jobs", None)
     assert offers is not None and jobs is not None
     assert is_public_route(offers)

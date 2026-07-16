@@ -382,9 +382,7 @@ def sim_launch(request: LaunchRequest) -> LaunchResult:
             reason="sim inject timeout / oversize sleep",
             fabric_gate=gate.fabric_gate if not gate.composite_zeroed else 0.0,
             composite=0.0,
-            score_factors=summarize_gate_for_score(
-                gate, correctness=0.0, efficiency=0.0
-            ),
+            score_factors=summarize_gate_for_score(gate, correctness=0.0, efficiency=0.0),
             world_size=world_size,
             honesty_level=honesty,
             integrity_fail=False,

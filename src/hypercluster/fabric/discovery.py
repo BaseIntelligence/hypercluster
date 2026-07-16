@@ -163,9 +163,11 @@ def build_fabric_report(
     if force_empty_topo_sha:
         topo_sha = ""
     else:
-        topo_sha = gpu_topo_sha256_from_matrix(matrix) if matrix else (
+        topo_sha = (
+            gpu_topo_sha256_from_matrix(matrix)
+            if matrix
             # Single-GPU / empty matrix still needs a nonempty digest input for schema.
-            hashlib.sha256(f"empty-topo:{node_id}:{gpu_count}".encode()).hexdigest()
+            else (hashlib.sha256(f"empty-topo:{node_id}:{gpu_count}".encode()).hexdigest())
         )
 
     rate = ib_rate_gbps
@@ -239,9 +241,7 @@ def validate_accepted_report(report: FabricReport, *, gpu_count: int | None = No
     if report.report_digest != expected:
         # Allow caller-supplied digests when payload was sealed earlier with same
         # logical content under alternate datetime serialization — re-check strict.
-        raise ValueError(
-            f"report_digest mismatch: got {report.report_digest}, expected {expected}"
-        )
+        raise ValueError(f"report_digest mismatch: got {report.report_digest}, expected {expected}")
     return report
 
 

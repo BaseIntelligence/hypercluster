@@ -74,9 +74,7 @@ def normalize_scenario_names(
         if not key:
             continue
         if key not in known:
-            raise ValueError(
-                f"unknown scenario {raw!r}; known: {', '.join(KNOWN_SCENARIOS)}"
-            )
+            raise ValueError(f"unknown scenario {raw!r}; known: {', '.join(KNOWN_SCENARIOS)}")
         if key not in out:
             out.append(key)
     if not out:
@@ -354,9 +352,7 @@ def run_cross_docker_scenario_proxy_bundle(
         include_proxy=include_proxy,
         app=app,
         docker_host_port=(
-            DEFAULT_CROSS_DOCKER_HOST_PORT
-            if docker_host_port is None
-            else int(docker_host_port)
+            DEFAULT_CROSS_DOCKER_HOST_PORT if docker_host_port is None else int(docker_host_port)
         ),
     )
 

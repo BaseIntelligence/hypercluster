@@ -192,9 +192,7 @@ def build_raw_weight_push_body(
     Raises WeightPushValidationError on inverted/expired window or empty map.
     """
 
-    validate_freshness_window(
-        computed_at=computed_at, expires_at=expires_at, now=computed_at
-    )
+    validate_freshness_window(computed_at=computed_at, expires_at=expires_at, now=computed_at)
     cleaned = filter_ss58_weights(weights)
     if not cleaned:
         raise WeightPushValidationError(
@@ -506,9 +504,7 @@ class WeightPushClient:
             timestamp=str(timestamp),
             body=body,
         )
-        signature = sign_challenge_push_request(
-            token=self.shared_token, canonical=canonical
-        )
+        signature = sign_challenge_push_request(token=self.shared_token, canonical=canonical)
         return {
             "Authorization": f"Bearer {self.shared_token}",
             "Content-Type": "application/json",
@@ -519,9 +515,7 @@ class WeightPushClient:
         }
 
     @staticmethod
-    def _ack_matches(
-        ack: RawWeightPushAcknowledgement, *, payload: RawWeightPushRequest
-    ) -> bool:
+    def _ack_matches(ack: RawWeightPushAcknowledgement, *, payload: RawWeightPushRequest) -> bool:
         return (
             ack.accepted is True
             and ack.challenge_slug == payload.challenge_slug
@@ -559,9 +553,7 @@ class WeightPushClient:
             async with self.database.session() as session:
                 if reuse_snapshot_id is not None:
                     result = await session.execute(
-                        select(WeightSnapshot).where(
-                            WeightSnapshot.id == reuse_snapshot_id
-                        )
+                        select(WeightSnapshot).where(WeightSnapshot.id == reuse_snapshot_id)
                     )
                     snapshot = result.scalar_one_or_none()
                     if snapshot is None:
@@ -671,9 +663,7 @@ class WeightPushClient:
 
         path = self._path()
         url = f"{self.master_base_url}{path}"
-        headers = self._headers(
-            path=path, body=raw_bytes, timestamp=int(now.timestamp())
-        )
+        headers = self._headers(path=path, body=raw_bytes, timestamp=int(now.timestamp()))
         client = self._http
         owns_client = client is None
         if owns_client:
@@ -871,9 +861,7 @@ def maybe_build_push_client(
         freshness_seconds=int(
             getattr(product, "weight_push_freshness_s", DEFAULT_FRESHNESS_SECONDS)
         ),
-        timeout_seconds=float(
-            getattr(product, "weight_push_timeout_s", DEFAULT_TIMEOUT_SECONDS)
-        ),
+        timeout_seconds=float(getattr(product, "weight_push_timeout_s", DEFAULT_TIMEOUT_SECONDS)),
     )
 
 

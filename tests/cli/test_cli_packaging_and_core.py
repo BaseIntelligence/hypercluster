@@ -51,6 +51,7 @@ REQUIRED_TOP_LEVEL = (
     "score",
     "weights",
     "points",
+    "prices",
     "sim",
 )
 

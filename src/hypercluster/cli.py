@@ -1,8 +1,8 @@
 """Hypercluster Typer CLI — packaging core + domain subcommands.
 
-Groups (VAL-CLI-001 / VAL-WGT-021):
+Groups (VAL-CLI-001 / VAL-WGT-021 / VAL-PRICE-040/041):
   serve, version, health --url, db, marketplace, nodes, jobs, fabric, attest,
-  score, weights, points, sim {seed, run-scenario, doctor}
+  score, weights, points, prices, sim {seed, run-scenario, doctor}
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from hypercluster.cli_common import (
     DEFAULT_BASE_URL,
     require_mutate_auth,
     resolve_base_url,
+    resolve_shared_token,
 )
 from hypercluster.cli_ops import (
     db_app,
@@ -74,6 +75,14 @@ points_app = typer.Typer(
     no_args_is_help=True,
     help="Challenge-local points balance/list/history (VAL-WGT-021). Never set_weights.",
 )
+prices_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help=(
+        "GPU price catalog list|get|set|disable|history (VAL-PRICE-040/041). "
+        "Shared token via env; never print token."
+    ),
+)
 # Root groups (VAL-CLI-001 / packaging)
 register_serve(app)
 app.add_typer(db_app, name="db")
@@ -86,6 +95,7 @@ app.add_typer(attest_app, name="attest")
 app.add_typer(score_app, name="score")
 app.add_typer(weights_app, name="weights")
 app.add_typer(points_app, name="points")
+app.add_typer(prices_app, name="prices")
 fabric_app.add_typer(fabric_report_app, name="report")
 register_nodes_mutate(nodes_app)
 
@@ -1093,6 +1103,228 @@ def weights_push_cmd(
         # soft ok for idempotent already-acked is included in acknowledged
         if body.get("push_status") not in {"acked", "sim"}:
             raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+def _admin_token_headers(token: str) -> dict[str, str]:
+    """Build admin challenge-token headers without attaching related secrets.
+
+    Prefer Authorization Bearer; X-Challenge-Token is also accepted by the
+    price admin API. Caller must never echo *token* in stdout/stderr.
+    """
+
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-Challenge-Token": token,
+    }
+
+
+def _prices_http(
+    method: str,
+    url: str,
+    *,
+    token: str | None = None,
+    json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> httpx.Response:
+    """HTTP helper for prices CLI; nonzero exit on connection / 4xx / 5xx.
+
+    Response body is returned to the caller for printing; never includes the
+    challenge shared token in raised messages.
+    """
+
+    headers: dict[str, str] = {}
+    if token:
+        headers.update(_admin_token_headers(token))
+    content: bytes | None = None
+    if json_body is not None:
+        content = json.dumps(json_body).encode()
+        headers.setdefault("Content-Type", "application/json")
+    try:
+        response = httpx.request(
+            method.upper(),
+            url,
+            content=content,
+            headers=headers,
+            params=params,
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        # Do not interpolate token; url and generic exception type only.
+        typer.echo(f"connection error for {url}: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1) from exc
+    if response.status_code >= 400:
+        # Truncate body; never re-emit auth headers (token must not leak).
+        snippet = (response.text or "")[:500]
+        typer.echo(f"API error {response.status_code} for {url}: {snippet}", err=True)
+        raise typer.Exit(code=1)
+    return response
+
+
+@prices_app.command("list")
+def prices_list_cmd(
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    all_rows: bool = typer.Option(
+        False,
+        "--all",
+        help="Include inactive rows via admin list (requires shared token)",
+    ),
+    family: str | None = typer.Option(None, "--family", help="Optional family filter"),
+    model_key: str | None = typer.Option(
+        None, "--model-key", help="Optional model_key filter"
+    ),
+    limit: int = typer.Option(500, "--limit", help="Max catalog rows"),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Challenge shared token for --all / admin (or CHALLENGE_SHARED_TOKEN). Never printed.",
+    ),
+) -> None:
+    """List active GPU catalog (public API). ``--all`` uses admin token (VAL-PRICE-040)."""
+
+    base = _resolve_base_url(url, host, port)
+    params: dict[str, Any] = {"limit": limit}
+    if family:
+        params["family"] = family
+    if model_key:
+        params["model_key"] = model_key
+
+    if all_rows:
+        resolved = resolve_shared_token(token, required=True)
+        assert resolved is not None
+        response = _prices_http(
+            "GET",
+            f"{base}/v1/admin/gpu-prices",
+            token=resolved,
+            params={**params, "active_only": "false"},
+        )
+    else:
+        response = _prices_http(
+            "GET",
+            f"{base}/v1/gpu-prices",
+            params=params,
+        )
+    typer.echo(response.text)
+    raise typer.Exit(code=0)
+
+
+@prices_app.command("get")
+def prices_get_cmd(
+    model_key: str = typer.Argument(..., help="Catalog model_key (e.g. H100_80GB)"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+) -> None:
+    """Get active public catalog row for MODEL_KEY (VAL-PRICE-040)."""
+
+    base = _resolve_base_url(url, host, port)
+    response = _prices_http("GET", f"{base}/v1/gpu-prices/{model_key}")
+    typer.echo(response.text)
+    raise typer.Exit(code=0)
+
+
+@prices_app.command("set")
+def prices_set_cmd(
+    model_key: str = typer.Argument(..., help="Catalog model_key to upsert"),
+    price: float = typer.Option(..., "--price", help="USD price_per_hour (> 0)"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    family: str | None = typer.Option(None, "--family", help="Optional GPU family"),
+    display: str | None = typer.Option(
+        None, "--display", help="Optional display_name"
+    ),
+    notes: str | None = typer.Option(None, "--notes", help="Optional operator notes"),
+    reason: str | None = typer.Option(None, "--reason", help="Audit reason for history"),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Challenge shared token (or CHALLENGE_SHARED_TOKEN). Never printed.",
+    ),
+) -> None:
+    """Admin upsert catalog price (VAL-PRICE-041). Auth via env; never prints token."""
+
+    base = _resolve_base_url(url, host, port)
+    resolved = resolve_shared_token(token, required=True)
+    assert resolved is not None
+    body: dict[str, Any] = {"price_per_hour": float(price)}
+    if family is not None:
+        body["family"] = family
+    if display is not None:
+        body["display_name"] = display
+    if notes is not None:
+        body["notes"] = notes
+    if reason is not None:
+        body["reason"] = reason
+    response = _prices_http(
+        "PUT",
+        f"{base}/v1/admin/gpu-prices/{model_key}",
+        token=resolved,
+        json_body=body,
+    )
+    typer.echo(response.text)
+    raise typer.Exit(code=0)
+
+
+@prices_app.command("disable")
+def prices_disable_cmd(
+    model_key: str = typer.Argument(..., help="Catalog model_key to disable"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    reason: str | None = typer.Option(None, "--reason", help="Audit reason for history"),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Challenge shared token (or CHALLENGE_SHARED_TOKEN). Never printed.",
+    ),
+) -> None:
+    """Admin disable catalog entry (active=0); appends history (VAL-PRICE-041)."""
+
+    base = _resolve_base_url(url, host, port)
+    resolved = resolve_shared_token(token, required=True)
+    assert resolved is not None
+    body: dict[str, Any] = {}
+    if reason is not None:
+        body["reason"] = reason
+    response = _prices_http(
+        "POST",
+        f"{base}/v1/admin/gpu-prices/{model_key}/disable",
+        token=resolved,
+        json_body=body if body else {},
+    )
+    typer.echo(response.text)
+    raise typer.Exit(code=0)
+
+
+@prices_app.command("history")
+def prices_history_cmd(
+    model_key: str = typer.Argument(..., help="Catalog model_key for audit history"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    limit: int = typer.Option(100, "--limit", help="Max history rows"),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Challenge shared token (or CHALLENGE_SHARED_TOKEN). Never printed.",
+    ),
+) -> None:
+    """Admin history for MODEL_KEY, newest first (VAL-PRICE-041). Never prints token."""
+
+    base = _resolve_base_url(url, host, port)
+    resolved = resolve_shared_token(token, required=True)
+    assert resolved is not None
+    response = _prices_http(
+        "GET",
+        f"{base}/v1/admin/gpu-prices/{model_key}/history",
+        token=resolved,
+        params={"limit": limit},
+    )
+    typer.echo(response.text)
     raise typer.Exit(code=0)
 
 

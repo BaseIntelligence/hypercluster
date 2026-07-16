@@ -276,6 +276,24 @@ def _offer_caps(request: Request) -> tuple[float, float]:
     return price_cap, lifetime_cap
 
 
+def _offer_price_policy(request: Request) -> dict[str, Any]:
+    """M11 catalog band / enforce knobs (VAL-PRICE-050..053)."""
+
+    hyper = getattr(request.app.state, "hyper_settings", None)
+    policy: dict[str, Any] = {
+        "price_enforce": "off",
+        "price_max_multiplier": 3.0,
+        "price_min_multiplier": 0.25,
+    }
+    if hyper is not None:
+        policy["price_enforce"] = (
+            str(getattr(hyper, "price_enforce", "off") or "off").strip().lower()
+        )
+        policy["price_max_multiplier"] = float(getattr(hyper, "price_max_multiplier", 3.0) or 3.0)
+        policy["price_min_multiplier"] = float(getattr(hyper, "price_min_multiplier", 0.25) or 0.25)
+    return policy
+
+
 def _job_admit_kwargs(request: Request) -> dict[str, Any]:
     """Resolve job admit caps/allowlist from HyperSettings."""
 
@@ -720,9 +738,14 @@ async def offers_create(
     session: DbSession,
     request: Request,
 ) -> dict[str, Any]:
-    """Publish capacity offer with hard price/lifetime guards (VAL-MKT-008..011)."""
+    """Publish capacity offer with hard price/lifetime guards (VAL-MKT-008..011).
+
+    M11 (VAL-PRICE-050..053): omit/null ``price_per_hour`` defaults from the
+    active GPU price catalog; ``HYPER_PRICE_ENFORCE`` optional band.
+    """
 
     price_cap, lifetime_cap = _offer_caps(request)
+    price_policy = _offer_price_policy(request)
     try:
         offer = await create_offer(
             session,
@@ -739,6 +762,9 @@ async def offers_create(
             metadata=body.metadata,
             max_price_cap=price_cap,
             max_lifetime_cap=lifetime_cap,
+            price_enforce=str(price_policy["price_enforce"]),
+            price_max_multiplier=float(price_policy["price_max_multiplier"]),
+            price_min_multiplier=float(price_policy["price_min_multiplier"]),
         )
     except OfferError as exc:
         raise HTTPException(

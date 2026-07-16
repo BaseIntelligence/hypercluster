@@ -190,6 +190,11 @@ class Offer(Base):
     # listed|leased|expired|withdrawn
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="listed", index=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # M11 forensic snapshots (VAL-PRICE-050): optional catalog default bookkeeping.
+    # explicit | catalog_default — null for pre-M11 rows.
+    price_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    catalog_model_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    catalog_price_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -218,7 +223,7 @@ class Offer(Base):
                 meta = json.loads(self.metadata_json)
             except (TypeError, ValueError):
                 meta = self.metadata_json
-        return {
+        body: dict[str, Any] = {
             "id": self.id,
             "provider_id": self.provider_id,
             "node_ids": self.node_ids(),
@@ -236,6 +241,14 @@ class Offer(Base):
             "created_at": isoformat_utc(self.created_at),
             "updated_at": isoformat_utc(self.updated_at),
         }
+        # Expose M11 snapshots when present (omit nulls for pre-M11 rows).
+        if self.price_source is not None:
+            body["price_source"] = self.price_source
+        if self.catalog_model_key is not None:
+            body["catalog_model_key"] = self.catalog_model_key
+        if self.catalog_price_per_hour is not None:
+            body["catalog_price_per_hour"] = float(self.catalog_price_per_hour)
+        return body
 
 
 class Lease(Base):
@@ -942,14 +955,10 @@ class GpuPriceCatalog(Base):
         if include_admin:
             body["notes"] = self.notes
             body["max_offer_multiplier"] = (
-                None
-                if self.max_offer_multiplier is None
-                else float(self.max_offer_multiplier)
+                None if self.max_offer_multiplier is None else float(self.max_offer_multiplier)
             )
             body["min_offer_multiplier"] = (
-                None
-                if self.min_offer_multiplier is None
-                else float(self.min_offer_multiplier)
+                None if self.min_offer_multiplier is None else float(self.min_offer_multiplier)
             )
         return body
 
@@ -962,9 +971,7 @@ class GpuPriceHistory(Base):
     """
 
     __tablename__ = "gpu_price_history"
-    __table_args__ = (
-        Index("ix_gpu_price_history_model_key_created", "model_key", "created_at"),
-    )
+    __table_args__ = (Index("ix_gpu_price_history_model_key_created", "model_key", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     model_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)

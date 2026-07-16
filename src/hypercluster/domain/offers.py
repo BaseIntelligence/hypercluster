@@ -1,4 +1,11 @@
-"""Offer create / withdraw / browse domain service (price + lifetime hard guards)."""
+"""Offer create / withdraw / browse domain service (price + lifetime hard guards).
+
+M11 (VAL-PRICE-050..053): omit/null ``price_per_hour`` fills from the active
+GPU price catalog when a row resolves; without catalog → 422
+``missing_price_per_hour``. Optional ``HYPER_PRICE_ENFORCE`` catalog band
+(hard rejects over/under; soft flags only). System max always applies.
+``enforce=off`` keeps explicit in-cap creates without requiring catalog.
+"""
 
 from __future__ import annotations
 
@@ -10,13 +17,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hypercluster.db.models import Node, Offer, utc_now
+from hypercluster.db.models import GpuPriceCatalog, Node, Offer, utc_now
 from hypercluster.domain.nodes import node_has_ib
+from hypercluster.domain.pricing import resolve_catalog_price
 from hypercluster.domain.providers import get_provider_by_hotkey
 
 # Default hard caps (override via HyperSettings).
 DEFAULT_MAX_OFFER_PRICE_PER_HOUR = 1000.0
 DEFAULT_MAX_OFFER_LIFETIME_HOURS = 720.0  # 30 days
+DEFAULT_PRICE_ENFORCE = "off"
+DEFAULT_PRICE_MAX_MULTIPLIER = 3.0
+DEFAULT_PRICE_MIN_MULTIPLIER = 0.25
+
+PRICE_SOURCE_EXPLICIT = "explicit"
+PRICE_SOURCE_CATALOG_DEFAULT = "catalog_default"
+PRICE_ENFORCE_MODES = frozenset({"off", "soft", "hard"})
 
 OFFER_STATUS_LISTED = "listed"
 OFFER_STATUS_WITHDRAWN = "withdrawn"
@@ -103,6 +118,71 @@ def _normalize_tee(value: str | None) -> str:
     return tee
 
 
+def _normalize_price_enforce(value: str | None) -> str:
+    mode = str(value or DEFAULT_PRICE_ENFORCE).strip().lower() or DEFAULT_PRICE_ENFORCE
+    if mode not in PRICE_ENFORCE_MODES:
+        return DEFAULT_PRICE_ENFORCE
+    return mode
+
+
+def apply_catalog_price_band(
+    list_price: float,
+    catalog: GpuPriceCatalog,
+    *,
+    enforce: str = DEFAULT_PRICE_ENFORCE,
+    default_max_multiplier: float = DEFAULT_PRICE_MAX_MULTIPLIER,
+    default_min_multiplier: float = DEFAULT_PRICE_MIN_MULTIPLIER,
+) -> str | None:
+    """Optional catalog multiplier band (VAL-PRICE-052).
+
+    Returns a soft flag string when out-of-band under soft mode, else None.
+    Hard mode raises OfferError ``price_over/under_catalog_band``. Off mode
+    is a no-op (caller should still apply system max separately).
+    """
+
+    mode = _normalize_price_enforce(enforce)
+    if mode == "off":
+        return None
+    cat_price = float(catalog.price_per_hour)
+    if not math.isfinite(cat_price) or cat_price <= 0:
+        return None
+
+    max_m = catalog.max_offer_multiplier
+    if max_m is None or not math.isfinite(float(max_m)) or float(max_m) <= 0:
+        max_m = default_max_multiplier
+    min_m = catalog.min_offer_multiplier
+    if min_m is None or not math.isfinite(float(min_m)) or float(min_m) <= 0:
+        min_m = default_min_multiplier
+    max_m_f = float(max_m)
+    min_m_f = float(min_m)
+    upper = cat_price * max_m_f
+    lower = cat_price * min_m_f
+
+    if list_price > upper:
+        if mode == "hard":
+            raise OfferError(
+                "price_over_catalog_band",
+                (
+                    f"price_per_hour {list_price} exceeds catalog band upper "
+                    f"{upper} (catalog {cat_price} × max_multiplier {max_m_f})"
+                ),
+                status_code=422,
+            )
+        return "over_catalog_band"
+    if list_price < lower:
+        if mode == "hard":
+            raise OfferError(
+                "price_under_catalog_band",
+                (
+                    f"price_per_hour {list_price} below catalog band lower "
+                    f"{lower} (catalog {cat_price} × min_multiplier {min_m_f})"
+                ),
+                status_code=422,
+            )
+        return "under_catalog_band"
+    return None
+
+
 async def _load_owned_nodes(
     session: AsyncSession,
     *,
@@ -167,8 +247,19 @@ async def create_offer(
     metadata: dict[str, Any] | None = None,
     max_price_cap: float | None = DEFAULT_MAX_OFFER_PRICE_PER_HOUR,
     max_lifetime_cap: float | None = DEFAULT_MAX_OFFER_LIFETIME_HOURS,
+    price_enforce: str = DEFAULT_PRICE_ENFORCE,
+    price_max_multiplier: float = DEFAULT_PRICE_MAX_MULTIPLIER,
+    price_min_multiplier: float = DEFAULT_PRICE_MIN_MULTIPLIER,
 ) -> Offer:
-    """Create a listed offer with hard price/lifetime guards (VAL-MKT-008..011)."""
+    """Create a listed offer with hard price/lifetime guards (VAL-MKT-008..011).
+
+    M11 (VAL-PRICE-050..053):
+    - omit/null ``price_per_hour`` → catalog default when an active row resolves
+    - omit/null + no catalog → 422 ``missing_price_per_hour``
+    - explicit in-cap price with ``price_enforce=off`` works without catalog
+    - hard enforce rejects over/under catalog band; soft flags only
+    - system max always applies (``price_over_cap``)
+    """
 
     provider = await get_provider_by_hotkey(session, hotkey)
     if provider is None:
@@ -192,7 +283,6 @@ async def create_offer(
             status_code=422,
         )
 
-    price = validate_price(price_per_hour, max_price=max_price_cap)
     lifetime = validate_lifetime(max_lifetime_hours, max_lifetime=max_lifetime_cap)
 
     nodes = await _load_owned_nodes(session, provider_id=provider.id, node_ids=list(node_ids))
@@ -239,6 +329,57 @@ async def create_offer(
             status_code=422,
         )
 
+    # --- M11 price resolution: catalog default + optional band ---
+    # Prefer exact model_key hit when the advertised label is a catalog key,
+    # else family join via normalize_gpu_model(gpu_model).
+    catalog_row = await resolve_catalog_price(
+        session,
+        model_key=model_out,
+        gpu_model=model_out,
+    )
+
+    price_omitted = price_per_hour is None
+    price_source: str
+    catalog_model_key: str | None = None
+    catalog_price_snap: float | None = None
+    band_flag: str | None = None
+    meta_out: dict[str, Any] | None = dict(metadata) if metadata is not None else None
+
+    if price_omitted:
+        # VAL-PRICE-050 / 051: require active catalog for default fill.
+        if catalog_row is None:
+            raise OfferError(
+                "missing_price_per_hour",
+                "price_per_hour is required when no active catalog row resolves "
+                "for the offer GPU model/family",
+                status_code=422,
+            )
+        list_price = float(catalog_row.price_per_hour)
+        price_source = PRICE_SOURCE_CATALOG_DEFAULT
+        catalog_model_key = catalog_row.model_key
+        catalog_price_snap = list_price
+        price = validate_price(list_price, max_price=max_price_cap)
+    else:
+        price = validate_price(price_per_hour, max_price=max_price_cap)
+        price_source = PRICE_SOURCE_EXPLICIT
+        if catalog_row is not None:
+            catalog_model_key = catalog_row.model_key
+            catalog_price_snap = float(catalog_row.price_per_hour)
+
+    if catalog_row is not None:
+        band_flag = apply_catalog_price_band(
+            price,
+            catalog_row,
+            enforce=price_enforce,
+            default_max_multiplier=price_max_multiplier,
+            default_min_multiplier=price_min_multiplier,
+        )
+        if band_flag is not None:
+            if meta_out is None:
+                meta_out = {}
+            meta_out["price_band_flag"] = band_flag
+            meta_out["price_band_warning"] = band_flag
+
     tee_out = _normalize_tee(tee if tee is not None else nodes[0].tee_capability)
     now = utc_now()
     offer = Offer(
@@ -255,7 +396,10 @@ async def create_offer(
         max_lifetime_hours=lifetime,
         location_hint=location_hint or nodes[0].location_hint,
         status=OFFER_STATUS_LISTED,
-        metadata_json=json.dumps(metadata) if metadata is not None else None,
+        metadata_json=json.dumps(meta_out) if meta_out is not None else None,
+        price_source=price_source,
+        catalog_model_key=catalog_model_key,
+        catalog_price_per_hour=catalog_price_snap,
         created_at=now,
         updated_at=now,
     )
@@ -399,12 +543,19 @@ __all__ = [
     "ACTIVE_LEASE_BLOCK_STATUSES",
     "DEFAULT_MAX_OFFER_LIFETIME_HOURS",
     "DEFAULT_MAX_OFFER_PRICE_PER_HOUR",
+    "DEFAULT_PRICE_ENFORCE",
+    "DEFAULT_PRICE_MAX_MULTIPLIER",
+    "DEFAULT_PRICE_MIN_MULTIPLIER",
     "OFFER_STATUS_EXPIRED",
     "OFFER_STATUS_LEASED",
     "OFFER_STATUS_LISTED",
     "OFFER_STATUS_WITHDRAWN",
+    "PRICE_ENFORCE_MODES",
+    "PRICE_SOURCE_CATALOG_DEFAULT",
+    "PRICE_SOURCE_EXPLICIT",
     "OfferError",
     "VALID_MODES",
+    "apply_catalog_price_band",
     "create_offer",
     "get_offer",
     "list_offers",

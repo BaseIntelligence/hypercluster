@@ -867,6 +867,85 @@ class FabricReportRow(Base):
         }
 
 
+class PointsLedger(Base):
+    """Challenge-local points earn/adjust ledger (M10; VAL-WGT-001).
+
+    Durable rows under SQLite ``/data``. Points are **not** on-chain tokens;
+    they feed later sum-normalized incentives. No SQL ``gpu_price_catalog``:
+    offer ``price_per_hour`` stays a listing field only.
+
+    ``score_earn`` rows use ``attempt_id`` as the idempotency key (unique when
+    present). Admin/adjust rows may leave ``attempt_id`` null.
+    """
+
+    __tablename__ = "points_ledger"
+    __table_args__ = (UniqueConstraint("attempt_id", name="uq_points_ledger_attempt_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    hotkey: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    # demand|supply|joint when tied to a score role; null for pure admin rows.
+    role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    delta: Mapped[float] = mapped_column(Float, nullable=False)
+    balance_after: Mapped[float] = mapped_column(Float, nullable=False)
+    # score_earn | admin_adjust | epoch_settle | slash (expand later)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False, default="score_earn")
+    score_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Unique for score_earn: one positive mint (or zero row policy) per attempt.
+    attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        details: Any = None
+        if self.details_json:
+            try:
+                details = json.loads(self.details_json)
+            except (TypeError, ValueError):
+                details = self.details_json
+        return {
+            "id": self.id,
+            "hotkey": self.hotkey,
+            "role": self.role,
+            "delta": float(self.delta),
+            "balance_after": float(self.balance_after),
+            "reason": self.reason,
+            "score_id": self.score_id,
+            "attempt_id": self.attempt_id,
+            "details": details,
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
+class PointsBalance(Base):
+    """Optional denormalized balances rollup for ledger (M10; VAL-WGT-001).
+
+    Ledger remains source of truth; this table speeds balance/list reads.
+    """
+
+    __tablename__ = "points_balances"
+
+    hotkey: Mapped[str] = mapped_column(String(128), primary_key=True)
+    balance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "hotkey": self.hotkey,
+            "balance": float(self.balance),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+
+
 class WeightSnapshot(Base):
     """Monochronic raw-weight push snapshot (architecture §3.1 / §10.3).
 
@@ -1056,6 +1135,8 @@ __all__ = [
     "Lease",
     "Node",
     "Offer",
+    "PointsBalance",
+    "PointsLedger",
     "Pod",
     "Provider",
     "RequestNonce",

@@ -1,4 +1,4 @@
-"""Challenge-local points ledger earn from scored attempts (M10).
+"""Challenge-local points ledger earn from scored attempts (M10 + M11).
 
 Earn rule (VAL-WGT-002 / 003 / 004, library/points-incentive.md)::
 
@@ -7,11 +7,21 @@ Earn rule (VAL-WGT-002 / 003 / 004, library/points-incentive.md)::
     else:
         no positive score_earn mint
 
+Optional M11 competitiveness (VAL-PRICE-060..063, default OFF)::
+
+    if HYPER_PRICE_WEIGHT_IN_EARN:
+        price_weight = clamp(P_cat / P_list, floor, ceil)
+                       or HYPER_PRICE_WEIGHT_MISSING when prices unknown
+        delta = composite * scale * price_weight
+    else:
+        delta = composite * scale   # M10 parity
+
 Idempotency: at most one ``score_earn`` ledger row per ``attempt_id``
 (unique constraint + pre-check no-op). Balance rollup is updated in the same
 session flush.
 
 Downstream of the fixed four-factor product only — never a 5th scoring factor.
+price_weight multiplies ledger mint only; composite identity is untouched.
 """
 
 from __future__ import annotations
@@ -26,7 +36,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hypercluster.db.models import PointsBalance, PointsLedger, Score, utc_now
+from hypercluster.db.models import (
+    Job,
+    JobAttempt,
+    Lease,
+    Offer,
+    PointsBalance,
+    PointsLedger,
+    Score,
+    utc_now,
+)
 from hypercluster.settings import HyperSettings, get_hyper_settings
 
 logger = logging.getLogger(__name__)
@@ -37,16 +56,22 @@ REASON_ADMIN_ADJUST = "admin_adjust"
 # Tolerance: composites this close to zero never mint positive mass.
 _COMPOSITE_EPS = 0.0
 
+PRICE_WEIGHT_MODE_OFF = "off"
+PRICE_WEIGHT_MODE_MISSING = "missing"
+PRICE_WEIGHT_MODE_CATALOG_RATIO = "catalog_ratio"
+
 
 def compute_score_earn_delta(
     composite: float,
     *,
     scale: float = 1.0,
+    price_weight: float = 1.0,
 ) -> float:
     """Return the points delta for a score_earn, or 0.0 when no mint.
 
-    Positive finite composite × non-negative finite scale → positive delta.
-    Non-positive / non-finite composite, or non-positive / non-finite scale → 0.
+    Positive finite composite × non-negative finite scale × price_weight → delta.
+    Non-positive / non-finite composite, scale, or weight → 0 for bad inputs.
+    ``price_weight`` defaults to 1.0 (M10 parity / flag-off / missing prices).
     """
 
     try:
@@ -61,10 +86,101 @@ def compute_score_earn_delta(
         return 0.0
     if not math.isfinite(s) or s <= 0.0:
         return 0.0
-    delta = c * s
+    try:
+        w = float(price_weight)
+    except (TypeError, ValueError):
+        w = 1.0
+    if not math.isfinite(w) or w <= 0.0:
+        return 0.0
+    delta = c * s * w
     if not math.isfinite(delta) or delta <= 0.0:
         return 0.0
     return float(delta)
+
+
+def compute_price_weight(
+    *,
+    list_price: float | None,
+    catalog_price: float | None,
+    enabled: bool = False,
+    floor: float = 0.85,
+    ceil: float = 1.15,
+    missing: float = 1.0,
+) -> float:
+    """Competitiveness weight for optional points earn (VAL-PRICE-060..062).
+
+    * Flag off → 1.0 (M10 parity; no price term).
+    * Missing / non-positive list or catalog → ``missing`` (default 1.0 neutral).
+    * Else ``clamp(P_cat / P_list, floor, ceil)`` — bargain list < catalog
+      yields weight in (1, ceil]; gouge floors at floor so honest work is not zeroed.
+    """
+
+    if not enabled:
+        return 1.0
+
+    # Coerce missing default safely.
+    try:
+        miss = float(missing)
+    except (TypeError, ValueError):
+        miss = 1.0
+    if not math.isfinite(miss) or miss <= 0.0:
+        miss = 1.0
+
+    list_p = _positive_price_or_none(list_price)
+    cat_p = _positive_price_or_none(catalog_price)
+    if list_p is None or cat_p is None:
+        return float(miss)
+
+    # Guarantee floor <= ceil (swap if misconfigured); both must be positive finite.
+    try:
+        lo = float(floor)
+        hi = float(ceil)
+    except (TypeError, ValueError):
+        return float(miss)
+    if not math.isfinite(lo) or not math.isfinite(hi) or lo <= 0.0 or hi <= 0.0:
+        return float(miss)
+    if lo > hi:
+        lo, hi = hi, lo
+
+    ratio = cat_p / list_p
+    if not math.isfinite(ratio) or ratio <= 0.0:
+        return float(miss)
+    if ratio < lo:
+        return float(lo)
+    if ratio > hi:
+        return float(hi)
+    return float(ratio)
+
+
+def _positive_price_or_none(value: Any) -> float | None:
+    """Parse a single price field; missing / non-positive / non-finite → None."""
+
+    if value is None:
+        return None
+    try:
+        p = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p) or p <= 0.0:
+        return None
+    return float(p)
+
+
+def price_weight_mode(
+    *,
+    enabled: bool,
+    list_price: float | None,
+    catalog_price: float | None,
+) -> str:
+    """Mode tag persisted in ledger details_json for forensics."""
+
+    if not enabled:
+        return PRICE_WEIGHT_MODE_OFF
+    list_missing = _positive_price_or_none(list_price) is None
+    cat_missing = _positive_price_or_none(catalog_price) is None
+    if list_missing or cat_missing:
+        return PRICE_WEIGHT_MODE_MISSING
+    return PRICE_WEIGHT_MODE_CATALOG_RATIO
 
 
 def _safe_balance(value: Any) -> float:
@@ -230,17 +346,93 @@ async def _upsert_balance(
     return float(new_balance)
 
 
+async def resolve_earn_price_snapshot(
+    session: AsyncSession,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """Resolve list/catalog prices from attempt → job → lease → offer snaps.
+
+    Preference (design §7.2):
+    - ``P_list``: lease listed price else offer listed price.
+    - ``P_cat``: offer catalog snap (``catalog_price_per_hour``) when present.
+    Returns keys ``list_price_per_hour``, ``catalog_price_per_hour``,
+    ``catalog_model_key`` (values may be None when unbound / unsnapped).
+    """
+
+    empty: dict[str, Any] = {
+        "list_price_per_hour": None,
+        "catalog_price_per_hour": None,
+        "catalog_model_key": None,
+    }
+    aid = str(attempt_id or "").strip()
+    if not aid:
+        return empty
+
+    attempt = (
+        await session.execute(select(JobAttempt).where(JobAttempt.id == aid))
+    ).scalar_one_or_none()
+    if attempt is None:
+        return empty
+
+    job = (
+        await session.execute(select(Job).where(Job.id == attempt.job_id))
+    ).scalar_one_or_none()
+    if job is None:
+        return empty
+
+    list_price: float | None = None
+    catalog_price: float | None = None
+    catalog_model_key: str | None = None
+    offer: Offer | None = None
+
+    lease_id = getattr(job, "lease_id", None)
+    if lease_id:
+        lease = (
+            await session.execute(select(Lease).where(Lease.id == str(lease_id)))
+        ).scalar_one_or_none()
+        if lease is not None:
+            list_price = _positive_price_or_none(lease.price_per_hour)
+            offer = (
+                await session.execute(select(Offer).where(Offer.id == lease.offer_id))
+            ).scalar_one_or_none()
+
+    if offer is not None:
+        if list_price is None:
+            list_price = _positive_price_or_none(offer.price_per_hour)
+        catalog_price = _positive_price_or_none(getattr(offer, "catalog_price_per_hour", None))
+        key = getattr(offer, "catalog_model_key", None)
+        if key:
+            catalog_model_key = str(key)
+
+    return {
+        "list_price_per_hour": list_price,
+        "catalog_price_per_hour": catalog_price,
+        "catalog_model_key": catalog_model_key,
+    }
+
+
 async def earn_from_score(
     session: AsyncSession,
     score: Score,
     *,
     hyper: HyperSettings | None = None,
+    list_price_per_hour: float | None = None,
+    catalog_price_per_hour: float | None = None,
+    catalog_model_key: str | None = None,
 ) -> PointsLedger | None:
     """Mint ``score_earn`` points from a fully scored attempt (idempotent).
 
     VAL-WGT-002: composite > 0 → positive ledger delta & balance increase.
     VAL-WGT-003: composite ≤ 0 / integrity zero → no positive mint (None).
     VAL-WGT-004: same ``attempt_id`` replay is a no-op (returns existing row).
+    VAL-PRICE-060: flag off → delta == composite * scale (no price term).
+    VAL-PRICE-061: flag on + both prices > 0 → clamp(catalog/list, floor, ceil).
+    VAL-PRICE-062: missing/≤0 prices → HYPER_PRICE_WEIGHT_MISSING (default 1.0).
+    VAL-PRICE-063: price_weight multiplies ledger only; composite stays pure.
+
+    Optional explicit price kwargs override attempt→lease→offer resolve (tests /
+    callers that already hold snaps). When flag is off, prices are ignored for
+    math (delta parity with M10).
 
     Returns the ledger row created or the existing earn row; ``None`` when no
     positive mint and no prior earn for the attempt.
@@ -261,7 +453,55 @@ async def earn_from_score(
         return None
 
     scale = float(getattr(settings, "points_scale", 1.0))
-    delta = compute_score_earn_delta(float(score.composite), scale=scale)
+    weight_enabled = bool(getattr(settings, "price_weight_in_earn", False))
+    floor = float(getattr(settings, "price_weight_floor", 0.85))
+    ceil = float(getattr(settings, "price_weight_ceil", 1.15))
+    missing = float(getattr(settings, "price_weight_missing", 1.0))
+
+    list_p = list_price_per_hour
+    cat_p = catalog_price_per_hour
+    model_key = catalog_model_key
+    # Auto-resolve capacity snaps only when weight path is on and caller did not
+    # supply both sides (avoid extra SQL when flag off / fully explicit).
+    if weight_enabled and (list_p is None or cat_p is None):
+        try:
+            snap = await resolve_earn_price_snapshot(session, attempt_id)
+        except Exception:  # noqa: BLE001 — resolution is best-effort forensics
+            logger.exception(
+                "price_weight resolve failed for attempt_id=%s",
+                attempt_id,
+            )
+            snap = {
+                "list_price_per_hour": None,
+                "catalog_price_per_hour": None,
+                "catalog_model_key": None,
+            }
+        if list_p is None:
+            list_p = snap.get("list_price_per_hour")
+        if cat_p is None:
+            cat_p = snap.get("catalog_price_per_hour")
+        if not model_key:
+            model_key = snap.get("catalog_model_key")
+
+    weight = compute_price_weight(
+        list_price=list_p,
+        catalog_price=cat_p,
+        enabled=weight_enabled,
+        floor=floor,
+        ceil=ceil,
+        missing=missing,
+    )
+    mode = price_weight_mode(
+        enabled=weight_enabled,
+        list_price=list_p,
+        catalog_price=cat_p,
+    )
+
+    delta = compute_score_earn_delta(
+        float(score.composite),
+        scale=scale,
+        price_weight=weight,
+    )
     if delta <= 0.0:
         # Zero / non-positive composite: never mint positive points (VAL-WGT-003).
         return None
@@ -270,6 +510,8 @@ async def earn_from_score(
         "composite": float(score.composite),
         "scale": float(scale),
         "delta": float(delta),
+        "price_weight": float(weight),
+        "price_weight_mode": mode,
         "factors": {
             "correctness": float(score.correctness),
             "efficiency": float(score.efficiency),
@@ -277,6 +519,15 @@ async def earn_from_score(
             "tee_bonus": float(score.tee_bonus),
         },
     }
+    # Forensic price fields when present (VAL-PRICE-061 assessment keys).
+    list_pos = _positive_price_or_none(list_p)
+    cat_pos = _positive_price_or_none(cat_p)
+    if list_pos is not None:
+        details["list_price_per_hour"] = float(list_pos)
+    if cat_pos is not None:
+        details["catalog_price_per_hour"] = float(cat_pos)
+    if model_key:
+        details["catalog_model_key"] = str(model_key)
 
     # SAVEPOINT so a unique-attempt race does not abort the outer score seal txn.
     try:
@@ -314,6 +565,9 @@ async def earn_from_score_id(
     score_id: str,
     *,
     hyper: HyperSettings | None = None,
+    list_price_per_hour: float | None = None,
+    catalog_price_per_hour: float | None = None,
+    catalog_model_key: str | None = None,
 ) -> PointsLedger | None:
     """Lookup Score by id then earn (helper for seals that only have score id)."""
 
@@ -321,13 +575,24 @@ async def earn_from_score_id(
     score = result.scalar_one_or_none()
     if score is None:
         return None
-    return await earn_from_score(session, score, hyper=hyper)
+    return await earn_from_score(
+        session,
+        score,
+        hyper=hyper,
+        list_price_per_hour=list_price_per_hour,
+        catalog_price_per_hour=catalog_price_per_hour,
+        catalog_model_key=catalog_model_key,
+    )
 
 
 __all__ = [
+    "PRICE_WEIGHT_MODE_CATALOG_RATIO",
+    "PRICE_WEIGHT_MODE_MISSING",
+    "PRICE_WEIGHT_MODE_OFF",
     "REASON_ADMIN_ADJUST",
     "REASON_SCORE_EARN",
     "balance_row_to_public",
+    "compute_price_weight",
     "compute_score_earn_delta",
     "earn_from_score",
     "earn_from_score_id",
@@ -337,4 +602,6 @@ __all__ = [
     "ledger_row_to_public",
     "list_points_balances",
     "list_points_history",
+    "price_weight_mode",
+    "resolve_earn_price_snapshot",
 ]

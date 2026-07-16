@@ -1,12 +1,14 @@
 """Raw-weight push: monochronic snapshots, digest, mock-master ack.
 
-Fulfills VAL-SCORE-013, 014, 015, 017, 023, 024, 030.
+Fulfills VAL-SCORE-013, 014, 015, 017, 023, 024, 030 and VAL-WGT-015.
 
 Challenge builds ``RawWeightPushRequest`` (protocol 1.x), stores
 ``weight_snapshots`` with UNIQUE(epoch, revision), POSTs to Base master
 ``POST /internal/v1/challenges/{slug}/raw-weights`` (mock-master :3201 in
-mission). Never calls on-chain ``set_weights``. Push loop is cooperative
-async and MUST NOT block ``/health``.
+mission). Posted ``weights`` are the **sum-normalized** incentive map
+(sum ≈ 1.0 when non-empty); ``raw_mass_json`` retains pre-normalize mass.
+Never calls on-chain ``set_weights`` and never product-Verda egress. Push
+loop is cooperative async and MUST NOT block ``/health``.
 """
 
 from __future__ import annotations
@@ -37,7 +39,10 @@ from hypercluster.domain.aggregation import (
     compute_raw_weights,
     sanitize_weights_map,
 )
-from hypercluster.domain.incentive import finalize_incentives_with_settings
+from hypercluster.domain.incentive import (
+    finalize_incentives,
+    finalize_incentives_with_settings,
+)
 from hypercluster.no_verda import (
     VerdaForbiddenError,
     assert_challenge_outbound_allowed,
@@ -191,8 +196,14 @@ def build_raw_weight_push_body(
     computed_at: datetime,
     expires_at: datetime,
     protocol_version: str = PROTOCOL_VERSION,
+    already_normalized: bool = False,
 ) -> tuple[RawWeightPushRequest, bytes]:
     """Build digest-bound Base RawWeightPushRequest bytes.
+
+    Egress maps are sum-normalized incentives (VAL-WGT-015): when mass > 0 the
+    posted ``weights`` sum ≈ 1.0; empty remains burn-safe (no push). Callers
+    that already finalized a unit-sum map may pass ``already_normalized=True``
+    to skip a second normalize (idempotent: unit maps stay unit).
 
     Raises WeightPushValidationError on inverted/expired window or empty map.
     """
@@ -200,6 +211,17 @@ def build_raw_weight_push_body(
     validate_freshness_window(computed_at=computed_at, expires_at=expires_at, now=computed_at)
     cleaned = filter_ss58_weights(weights)
     if not cleaned:
+        raise WeightPushValidationError(
+            "empty_weights",
+            "empty weight map has no push surface",
+        )
+    # VAL-WGT-015: mock-master / master raw-weights body carries unit-sum
+    # incentives, never absolute composite mass alone.
+    if already_normalized:
+        emission = cleaned
+    else:
+        emission = filter_ss58_weights(finalize_incentives(cleaned, sum_normalize=True))
+    if not emission:
         raise WeightPushValidationError(
             "empty_weights",
             "empty weight map has no push surface",
@@ -213,7 +235,7 @@ def build_raw_weight_push_body(
         "computed_at": as_utc(computed_at).replace(microsecond=0),
         "expires_at": as_utc(expires_at).replace(microsecond=0),
         "nonce": str(nonce),
-        "weights": {str(k): float(v) for k, v in cleaned.items()},
+        "weights": {str(k): float(v) for k, v in emission.items()},
     }
     # Digests exclude payload_digest field.
     digest_src = {
@@ -224,7 +246,7 @@ def build_raw_weight_push_body(
         "computed_at": isoformat_utc(as_utc(computed_at).replace(microsecond=0)),
         "expires_at": isoformat_utc(as_utc(expires_at).replace(microsecond=0)),
         "nonce": str(nonce),
-        "weights": {str(k): float(v) for k, v in cleaned.items()},
+        "weights": {str(k): float(v) for k, v in emission.items()},
     }
     digest = RawWeightPushRequest.compute_digest(digest_src)
     body["payload_digest"] = digest
@@ -422,6 +444,9 @@ async def create_pending_snapshot(
 
     local_id = str(uuid.uuid4())
     n = nonce or f"hyper-{uuid.uuid4().hex}"
+    # weight_map is already unit-sum from finalize_incentives_with_settings
+    # (or live compute_raw_weights); flag already_normalized to keep digest
+    # stable and avoid a redundant second pass (still idempotent if reused).
     payload, raw = build_raw_weight_push_body(
         challenge_slug=challenge_slug,
         epoch=resolved_epoch,
@@ -430,6 +455,7 @@ async def create_pending_snapshot(
         nonce=n,
         computed_at=computed,
         expires_at=expires,
+        already_normalized=True,
     )
     row = _snapshot_from_payload(
         local_id=local_id,

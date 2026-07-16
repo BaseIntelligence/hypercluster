@@ -1,7 +1,8 @@
-"""Incentive clamp + sum-normalize + snapshot raw mass (VAL-WGT-010..014, 022).
+"""Incentive clamp + sum-normalize + snapshot raw mass + push (VAL-WGT-010..015, 022).
 
 M10 default: finite ≥0 clamp; optional top-k / max-fraction; sum≈1 when mass>0;
-empty → {}; weight_snapshots store normalized map + retain raw mass.
+empty → {}; weight_snapshots store normalized map + retain raw mass; mock-master
+push payload is the unit-sum incentive map (VAL-WGT-015).
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from base.challenge_sdk.schemas import RawWeightPushRequest
 from httpx import ASGITransport, AsyncClient
 
 from hypercluster.db.models import Job, JobAttempt
@@ -27,7 +30,15 @@ from hypercluster.domain.incentive import (
 )
 from hypercluster.domain.scoring_tee import persist_score_for_attempt
 from hypercluster.settings import HyperSettings
-from hypercluster.weight_push import create_pending_snapshot
+from hypercluster.sim.mock_master import app as mock_master_app
+from hypercluster.sim.mock_master import configure_token, reset_store
+from hypercluster.weight_push import (
+    WeightPushClient,
+    build_raw_weight_push_body,
+    compute_payload_digest_for_body,
+    create_pending_snapshot,
+    get_snapshot_by_epoch_revision,
+)
 from hypercluster.weights import get_weights, weight_preview_payload
 
 # Base-like ss58 keys for snapshot / get_weights integration.
@@ -395,3 +406,123 @@ async def test_poisoned_composites_never_yield_nan_weights(
     out2 = finalize_incentives(mixed, sum_normalize=True)
     assert weight_sum(out2) == pytest.approx(1.0, abs=UNIT_SUM_TOLERANCE)
     assert all(math.isfinite(v) and v >= 0.0 for v in out2.values())
+
+
+# ----- push payload: VAL-WGT-015 ---------------------------------------------
+
+
+def test_build_push_body_normalizes_absolute_mass() -> None:
+    """VAL-WGT-015: raw-weights builder coerces absolute mass → unit-sum on egress."""
+
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    expires = now + timedelta(seconds=300)
+    absolute = {HOTKEY_A: 15.0, HOTKEY_B: 5.0}
+    payload, raw = build_raw_weight_push_body(
+        challenge_slug=SLUG,
+        epoch=77,
+        revision=1,
+        weights=absolute,
+        nonce="n-unit-sum-push",
+        computed_at=now,
+        expires_at=expires,
+    )
+    body = json.loads(raw)
+    wmap = {str(k): float(v) for k, v in body["weights"].items()}
+    assert weight_sum(wmap) == pytest.approx(1.0, abs=UNIT_SUM_TOLERANCE)
+    assert wmap[HOTKEY_A] == pytest.approx(0.75)
+    assert wmap[HOTKEY_B] == pytest.approx(0.25)
+    # Digest matches independent recompute over the normalized body.
+    expected = compute_payload_digest_for_body(
+        {k: v for k, v in body.items() if k != "payload_digest"}
+    )
+    assert payload.payload_digest == expected
+    # Absolute mass must not appear as total\approx20 on the wire.
+    assert weight_sum(wmap) != pytest.approx(20.0)
+
+
+@pytest.mark.asyncio
+async def test_push_to_mock_master_uses_normalized_weights(
+    settings_factory: Any, tmp_path: Path
+) -> None:
+    """VAL-WGT-015: POST raw-weights body is unit-sum; digest matches; acked."""
+
+    from hypercluster.app import create_app
+
+    reset_store()
+    configure_token(TOKEN)
+
+    settings = settings_factory(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'inc-push-norm.sqlite3'}",
+        shared_token=TOKEN,
+        shared_token_file=None,
+    )
+    hyper = _hyper()
+    app = create_app(settings, hyper_settings=hyper)
+
+    transport = httpx.ASGITransport(app=mock_master_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://mock-master.test"
+    ) as master_http:
+        async with app.router.lifespan_context(app):
+            db = app.state.database
+            async with db.session() as session:
+                # Absolute mass 12 + 4 = 16; unit shares must be 0.75 / 0.25.
+                await _seed_score(session, hotkey=HOTKEY_A, efficiency=12.0, hyper=hyper)
+                await _seed_score(session, hotkey=HOTKEY_B, efficiency=4.0, hyper=hyper)
+                await session.commit()
+
+            client = WeightPushClient(
+                database=db,
+                challenge_slug=SLUG,
+                master_base_url="http://mock-master.test",
+                shared_token=TOKEN,
+                hyper=hyper,
+                http_client=master_http,
+            )
+            result = await client.push_once(epoch=515)
+            assert result.status == "acknowledged", result.error
+            assert result.push_status == "acked"
+            assert result.payload_digest
+            assert len(result.payload_digest) == 64
+
+            # Capture from mock-master debug store (wire payload weights).
+            listed = await master_http.get(f"/internal/v1/challenges/{SLUG}/raw-weights")
+            assert listed.status_code == 200, listed.text
+            items = listed.json()["items"]
+            assert items, "mock-master must store accepted push"
+            pushed = items[-1]
+            wire_weights = {str(k): float(v) for k, v in pushed["weights"].items()}
+            assert weight_sum(wire_weights) == pytest.approx(1.0, abs=UNIT_SUM_TOLERANCE)
+            assert wire_weights[HOTKEY_A] == pytest.approx(0.75)
+            assert wire_weights[HOTKEY_B] == pytest.approx(0.25)
+            # Absolute mass must not leak as the egress map sum.
+            assert weight_sum(wire_weights) != pytest.approx(16.0)
+            assert pushed["payload_digest"] == result.payload_digest
+            assert int(pushed["epoch"]) == 515
+
+            # Local snapshot: monochronic, unit-sum weights, raw mass retained.
+            async with db.session() as session:
+                row = await get_snapshot_by_epoch_revision(
+                    session, epoch=515, revision=result.revision
+                )
+                assert row is not None
+                assert row.push_status == "acked"
+                assert row.payload_digest == result.payload_digest
+                assert weight_sum(row.weights_map()) == pytest.approx(
+                    1.0, abs=UNIT_SUM_TOLERANCE
+                )
+                raw_mass = row.raw_mass_map()
+                assert raw_mass[HOTKEY_A] == pytest.approx(12.0)
+                assert raw_mass[HOTKEY_B] == pytest.approx(4.0)
+                # Canonical submit bytes recompute to same digest (VAL-WGT-015).
+                if row.canonical_payload:
+                    reparsed = RawWeightPushRequest.model_validate_json(row.canonical_payload)
+                    assert reparsed.payload_digest == result.payload_digest
+                    assert weight_sum(reparsed.weights) == pytest.approx(
+                        1.0, abs=UNIT_SUM_TOLERANCE
+                    )
+
+            # Never challenge set_weights — push client has no chain setter.
+            assert not hasattr(client, "set_weights")

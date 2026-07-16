@@ -1,6 +1,10 @@
 """Score-row aggregation window, raw weights, leaderboard, self-deal damping.
 
 Fulfills VAL-SCORE-008, 009, 010, 011, 012, 018, 022, 027, 029.
+M10 incentive normalize (VAL-WGT-010..014) applied at ``compute_raw_weights``:
+clamp finite ≥0 → optional top-k / max-fraction → sum-normalize to ~1.0 when
+mass > 0; empty → ``{}``. Leaderboard remains absolute population mass for
+observability; emission / get_weights / weight-preview use the unit-sum map.
 
 Policy (architecture §10.2 / library/scoring.md):
 
@@ -8,7 +12,7 @@ Policy (architecture §10.2 / library/scoring.md):
 2. Bind each row to ``(hotkey, role)``; roles ∈ {demand, supply, joint}.
 3. Sum positive composites per hotkey (single v1 emission pool).
 4. Soft-damp self-deal rows (details.self_deal or explicit flag) without NaN.
-5. Emit finite ≥0 raw map; empty participation → burn-safe ``{}``.
+5. Emit finite ≥0 mass map then sum-normalize (M10 default); empty → ``{}``.
 6. Leaderboard = aggregates sorted by mass descending; vacant → empty items.
 """
 
@@ -244,7 +248,11 @@ def aggregate_score_rows(
 
 
 def aggregates_to_weights(aggregates: Mapping[str, HotkeyAggregate]) -> dict[str, float]:
-    """Hotkey → finite ≥0 mass map; drop zero-mass keys for push economy."""
+    """Hotkey → finite ≥0 absolute mass map; drop zero-mass keys.
+
+    This is pre-normalize population mass (leaderboard / raw_mass snapshot).
+    Emission surfaces call :func:`finalize_incentives_with_settings` afterwards.
+    """
 
     weights: dict[str, float] = {}
     for hotkey, agg in aggregates.items():
@@ -269,16 +277,36 @@ async def compute_hotkey_aggregates(
     return aggregate_score_rows(rows, self_deal_damping=damping)
 
 
+async def compute_mass_map(
+    session: AsyncSession,
+    *,
+    hyper: HyperSettings | None = None,
+    window: int | None = None,
+) -> dict[str, float]:
+    """Pre-normalize absolute mass map (VAL-WGT-013 raw_mass source)."""
+
+    aggregates = await compute_hotkey_aggregates(session, hyper=hyper, window=window)
+    return aggregates_to_weights(aggregates)
+
+
 async def compute_raw_weights(
     session: AsyncSession,
     *,
     hyper: HyperSettings | None = None,
     window: int | None = None,
 ) -> dict[str, float]:
-    """Raw hotkey weights for get_weights / weight-preview (VAL-SCORE-009/010/011)."""
+    """Incentive weights for get_weights / weight-preview / push.
 
-    aggregates = await compute_hotkey_aggregates(session, hyper=hyper, window=window)
-    return aggregates_to_weights(aggregates)
+    M10 default: unit-sum map when mass > 0 (VAL-WGT-011/014); empty → ``{}``
+    (VAL-WGT-012). Absolute mass is available via :func:`compute_mass_map`.
+    """
+
+    # Local import avoids circular import with incentive → aggregation helpers.
+    from hypercluster.domain.incentive import finalize_incentives_with_settings
+
+    settings = hyper if hyper is not None else get_hyper_settings()
+    mass = await compute_mass_map(session, hyper=settings, window=window)
+    return finalize_incentives_with_settings(mass, hyper=settings)
 
 
 async def build_leaderboard(
@@ -312,6 +340,7 @@ __all__ = [
     "apply_self_deal_damping",
     "build_leaderboard",
     "compute_hotkey_aggregates",
+    "compute_mass_map",
     "compute_raw_weights",
     "finite_non_negative",
     "is_self_deal_score",

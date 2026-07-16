@@ -2,8 +2,11 @@
 
 Hypercluster never calls ``set_weights`` and never opens master Postgres.
 Weights are the finite ≥0 hotkey map produced by windowed score aggregation
-(architecture §10.2, VAL-SCORE-009/010/011/016/024/028). Empty participation is
-burn-safe (``{}`` — never a NaN/poison payload).
+then M10 incentive sum-normalize (architecture §10.2, VAL-SCORE-009/010/011/016
++ VAL-WGT-010..014). Empty participation is burn-safe (``{}``).
+
+Non-empty emission maps sum ≈ 1.0 within float tolerance. ``weight_snapshots``
+retain pre-normalize absolute mass in ``raw_mass_json`` for audit.
 
 ``get_weights_fn`` and ``GET /v1/weight-preview`` share the same map family:
 prefer the latest acked/pending snapshot when present, else live aggregation.
@@ -15,6 +18,7 @@ from typing import Any
 
 from hypercluster.domain.aggregation import (
     build_leaderboard,
+    compute_mass_map,
     compute_raw_weights,
     sanitize_weights_map,
 )
@@ -46,10 +50,11 @@ def clear_weights_runtime() -> None:
 
 
 async def get_weights() -> dict[str, float]:
-    """Return raw hotkey → finite non-negative floats.
+    """Return hotkey → finite non-negative incentive floats.
 
     Empty when no scores exist or the runtime database is unbound
-    (VAL-SCORE-010 burn-safe). Same map family as weight-preview (VAL-SCORE-016).
+    (VAL-SCORE-010 / VAL-WGT-012 burn-safe). Non-empty maps are unit-sum under
+    default M10 settings (VAL-WGT-014). Same family as weight-preview.
     """
 
     return sanitize_weights_map(await load_raw_weights())
@@ -126,6 +131,7 @@ async def weight_preview_payload(
     product = hyper if hyper is not None else (_hyper or get_hyper_settings())
     snapshot_meta: dict[str, Any] | None = None
     weights: dict[str, float] = {}
+    raw_mass: dict[str, float] = {}
     if db is not None:
         try:
             async with db.session() as session:
@@ -134,6 +140,7 @@ async def weight_preview_payload(
                 snap = await get_latest_snapshot(session, prefer_acked=False)
                 if snap is not None and snap.push_status != "invalid_window":
                     weights = sanitize_weights_map(snap.weights_map())
+                    raw_mass = sanitize_weights_map(snap.raw_mass_map())
                     snapshot_meta = {
                         "epoch": int(snap.epoch),
                         "revision": int(snap.revision),
@@ -143,16 +150,23 @@ async def weight_preview_payload(
                     }
                 if not weights:
                     weights = await compute_raw_weights(session, hyper=product)
+                    raw_mass = await compute_mass_map(session, hyper=product)
                     if snapshot_meta is None:
                         snapshot_meta = {"source": "aggregation"}
+                elif not raw_mass:
+                    # Legacy snapshot without raw_mass_json — live absolute mass.
+                    raw_mass = await compute_mass_map(session, hyper=product)
         except Exception:  # noqa: BLE001
             weights = {}
+            raw_mass = {}
     else:
         weights = await load_raw_weights(database=db, hyper=product)
     body: dict[str, Any] = {
         "weights": weights,
         "count": len(weights),
         "empty": len(weights) == 0,
+        # VAL-WGT-013: expose pre-normalize mass when available for audit.
+        "raw_mass": raw_mass,
     }
     if snapshot_meta is not None:
         body["snapshot"] = snapshot_meta

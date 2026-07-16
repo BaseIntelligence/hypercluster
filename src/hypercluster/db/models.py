@@ -952,6 +952,9 @@ class WeightSnapshot(Base):
     UNIQUE(epoch, revision). revision bumps on recompute within an epoch.
     push_status: pending|acked|rejected|sim|failed|invalid_window
     Challenge never calls set_weights; this is raw hotkey egress only.
+
+    M10 (VAL-WGT-013): ``weights_json`` holds the emission unit-sum map;
+    ``raw_mass_json`` retains pre-normalize absolute mass for audit.
     """
 
     __tablename__ = "weight_snapshots"
@@ -972,6 +975,9 @@ class WeightSnapshot(Base):
     nonce: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     payload_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     weights_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    # Pre-normalize absolute mass retained for audit (VAL-WGT-013). Nullable for
+    # legacy rows created before M10; empty object when unknown.
+    raw_mass_json: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     # pending|acked|rejected|sim|failed|invalid_window
     push_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     master_ack_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -989,9 +995,10 @@ class WeightSnapshot(Base):
         onupdate=utc_now,
     )
 
-    def weights_map(self) -> dict[str, float]:
+    @staticmethod
+    def _parse_float_map(raw: str | None) -> dict[str, float]:
         try:
-            parsed = json.loads(self.weights_json or "{}")
+            parsed = json.loads(raw or "{}")
         except (TypeError, ValueError):
             return {}
         if not isinstance(parsed, dict):
@@ -1003,6 +1010,14 @@ class WeightSnapshot(Base):
             except (TypeError, ValueError):
                 continue
         return out
+
+    def weights_map(self) -> dict[str, float]:
+        return self._parse_float_map(self.weights_json)
+
+    def raw_mass_map(self) -> dict[str, float]:
+        """Pre-normalize absolute mass (VAL-WGT-013). Empty when not retained."""
+
+        return self._parse_float_map(self.raw_mass_json)
 
     def to_dict(self) -> dict[str, Any]:
         ack: Any = None
@@ -1020,6 +1035,7 @@ class WeightSnapshot(Base):
             "nonce": self.nonce,
             "payload_digest": self.payload_digest,
             "weights": self.weights_map(),
+            "raw_mass": self.raw_mass_map(),
             "push_status": self.push_status,
             "master_ack": ack,
             "master_snapshot_id": self.master_snapshot_id,

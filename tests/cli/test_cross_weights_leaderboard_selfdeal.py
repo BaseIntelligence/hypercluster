@@ -365,10 +365,13 @@ def test_self_deal_demand_supply_finite_and_damped(
     self_w = float(wmap[SELF_DEAL_HK])
     twin_w = float(wmap.get(TWIN_HONEST_HK) or 0.0)
     assert self_w >= 0.0
-    # damped expected ~6.0; undamped would be 12.0
-    assert self_w < 12.0 - 1e-6
-    assert abs(self_w - 6.0) < 0.25
-    assert twin_w == pytest.approx(8.0, abs=0.25)
+    # M10: weight-preview is unit-sum. Absolute mass: self-deal damped ~6.0,
+    # twin honest 8.0; total window mass 12+6+2+6+8 = 34 → unit shares.
+    assert sum(float(v) for v in wmap.values()) == pytest.approx(1.0, abs=1e-6)
+    assert self_w == pytest.approx(6.0 / 34.0, abs=0.02)
+    assert twin_w == pytest.approx(8.0 / 34.0, abs=0.02)
+    # Soft damping still visible as ranking: twin > self-deal.
+    assert twin_w > self_w
 
 
 # ----- VAL-CROSS-027 mock-master down resilience -----------------------------

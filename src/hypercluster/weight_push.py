@@ -32,7 +32,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hypercluster.db.models import WeightSnapshot, isoformat_utc, utc_now
-from hypercluster.domain.aggregation import compute_raw_weights, sanitize_weights_map
+from hypercluster.domain.aggregation import (
+    compute_mass_map,
+    compute_raw_weights,
+    sanitize_weights_map,
+)
+from hypercluster.domain.incentive import finalize_incentives_with_settings
 from hypercluster.no_verda import (
     VerdaForbiddenError,
     assert_challenge_outbound_allowed,
@@ -317,7 +322,13 @@ def _snapshot_from_payload(
     payload: RawWeightPushRequest,
     push_status: str,
     canonical: bytes,
+    raw_mass: Mapping[str, float] | None = None,
 ) -> WeightSnapshot:
+    raw_mass_payload = (
+        {str(k): float(v) for k, v in sanitize_weights_map(raw_mass).items()}
+        if raw_mass is not None
+        else {}
+    )
     return WeightSnapshot(
         id=local_id,
         epoch=int(payload.epoch),
@@ -330,6 +341,8 @@ def _snapshot_from_payload(
             {str(k): float(v) for k, v in payload.weights.items()},
             sort_keys=True,
         ),
+        # VAL-WGT-013: retain pre-normalize absolute mass for audit.
+        raw_mass_json=json.dumps(raw_mass_payload, sort_keys=True),
         push_status=push_status,
         canonical_payload=canonical.decode("utf-8"),
         master_ack_json=None,
@@ -368,11 +381,20 @@ async def create_pending_snapshot(
     # Validate before any DB write — illegal windows leave no acked/pending row.
     validate_freshness_window(computed_at=computed, expires_at=expires, now=wall)
 
-    weight_map = (
-        filter_ss58_weights(weights)
-        if weights is not None
-        else filter_ss58_weights(await compute_raw_weights(session, hyper=settings))
-    )
+    # Resolve absolute mass + unit-sum incentive map (VAL-WGT-011/013).
+    # Caller-supplied ``weights`` is treated as mass input and re-normalized so
+    # push / snapshot always share the same emission family as get_weights.
+    if weights is not None:
+        raw_mass_map = sanitize_weights_map(weights)
+        weight_map = filter_ss58_weights(
+            finalize_incentives_with_settings(raw_mass_map, hyper=settings)
+        )
+        # Retain ss58-filtered raw mass for snapshot audit (pre-normalize).
+        raw_mass_retained = filter_ss58_weights(raw_mass_map)
+    else:
+        raw_mass_map = await compute_mass_map(session, hyper=settings)
+        raw_mass_retained = filter_ss58_weights(raw_mass_map)
+        weight_map = filter_ss58_weights(await compute_raw_weights(session, hyper=settings))
     if not weight_map:
         raise WeightPushValidationError(
             "empty_weights",
@@ -414,6 +436,7 @@ async def create_pending_snapshot(
         payload=payload,
         push_status="pending",
         canonical=raw,
+        raw_mass=raw_mass_retained,
     )
     session.add(row)
     await session.commit()

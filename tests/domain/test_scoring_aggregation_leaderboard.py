@@ -235,12 +235,17 @@ async def test_multi_hotkey_ranking_reflects_composite_mass(
             weights = await compute_raw_weights(session, hyper=hyper)
             assert all(math.isfinite(v) and v >= 0.0 for v in weights.values())
             assert weights[hotkey_a] > weights[hotkey_b]
-            assert weights[hotkey_a] == pytest.approx(15.0)
-            assert weights[hotkey_b] == pytest.approx(3.0)
+            # M10 default: sum-normalize emission map (15+3=18 → unit sum).
+            assert sum(weights.values()) == pytest.approx(1.0, abs=1e-6)
+            assert weights[hotkey_a] == pytest.approx(15.0 / 18.0)
+            assert weights[hotkey_b] == pytest.approx(3.0 / 18.0)
 
             board = await build_leaderboard(session, hyper=hyper)
             assert board[0]["hotkey"] == hotkey_a
             assert board[1]["hotkey"] == hotkey_b
+            # Leaderboard retains absolute aggregate mass for observability.
+            assert board[0]["aggregate"] == pytest.approx(15.0)
+            assert board[1]["aggregate"] == pytest.approx(3.0)
             assert board[0]["aggregate"] > board[1]["aggregate"]
 
         transport = ASGITransport(app=app)
@@ -255,6 +260,7 @@ async def test_multi_hotkey_ranking_reflects_composite_mass(
             assert preview.status_code == 200, preview.text
             wmap = preview.json()["weights"]
             assert wmap[hotkey_a] > wmap[hotkey_b]
+            assert sum(float(v) for v in wmap.values()) == pytest.approx(1.0, abs=1e-6)
             assert all(math.isfinite(v) and v >= 0.0 for v in wmap.values())
 
 
@@ -346,8 +352,10 @@ async def test_self_deal_soft_penalty_reduces_mass(settings_factory: Any, tmp_pa
 
             weights = await compute_raw_weights(session, hyper=hyper)
             assert weights[collude] < weights[honest]
-            assert weights[collude] == pytest.approx(4.0)
-            assert weights[honest] == pytest.approx(8.0)
+            # Absolute mass 4 honest-damped + 8 honest → unit shares 1/3 and 2/3.
+            assert sum(weights.values()) == pytest.approx(1.0, abs=1e-6)
+            assert weights[collude] == pytest.approx(4.0 / 12.0)
+            assert weights[honest] == pytest.approx(8.0 / 12.0)
             assert math.isfinite(weights[collude]) and weights[collude] >= 0.0
 
 
@@ -385,9 +393,14 @@ async def test_score_window_bounds_contribution(settings_factory: Any, tmp_path:
 
             window_rows = await list_scores_in_window(session, window=2)
             assert len(window_rows) == 2
-            # Ancient 100-mass not in window → raw mass is 1+2=3 not 103
+            # Ancient 100-mass not in window → absolute mass is 1+2=3 not 103;
+            # single-hotkey unit-sum emission is 1.0 (M10 default).
+            from hypercluster.domain.aggregation import compute_mass_map
+
+            mass = await compute_mass_map(session, hyper=hyper)
+            assert mass[hk] == pytest.approx(3.0)
             weights = await compute_raw_weights(session, hyper=hyper)
-            assert weights[hk] == pytest.approx(3.0)
+            assert weights[hk] == pytest.approx(1.0)
 
 
 # ----- VAL-SCORE-027 dual role same hotkey -----------------------------------
@@ -417,11 +430,15 @@ async def test_dual_role_same_hotkey_aggregates_finite(
             await _seed_score(session, hotkey=dual, role="supply", composite_efficiency=6.0)
             await session.commit()
 
+            from hypercluster.domain.aggregation import compute_mass_map
+
             aggregates = await compute_raw_weights(session, hyper=hyper)
             assert dual in aggregates
             assert math.isfinite(aggregates[dual]) and aggregates[dual] >= 0.0
-            # sum of both role composites (no self-deal)
-            assert aggregates[dual] == pytest.approx(10.0)
+            # Dual-role absolute mass 4+6=10; unit-sum emission is 1.0.
+            mass = await compute_mass_map(session, hyper=hyper)
+            assert mass[dual] == pytest.approx(10.0)
+            assert aggregates[dual] == pytest.approx(1.0)
 
             board = await build_leaderboard(session, hyper=hyper)
             assert len(board) == 1

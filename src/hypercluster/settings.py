@@ -180,6 +180,16 @@ class HyperSettings(BaseSettings):
     # points_delta = composite * scale when composite > 0; else no positive mint.
     points_enabled: bool = True
     points_scale: float = Field(default=1.0, ge=0.0)
+    # M10 incentive normalize (VAL-WGT-010..014). Downstream of aggregates only.
+    # Env: HYPER_INCENTIVE_SUM_NORMALIZE, HYPER_WEIGHT_MAX_FRACTION,
+    # HYPER_WEIGHT_TOP_K, HYPER_WEIGHT_DUST.
+    # Default ON: emission / get_weights / weight-preview are unit-sum when mass>0.
+    incentive_sum_normalize: bool = True
+    # Optional cap as fraction of pre-norm total (e.g. 0.25); empty/None = off.
+    weight_max_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Optional keep only top-k largest mass keys before re-normalize; None/0 = off.
+    weight_top_k: int | None = Field(default=None, ge=0)
+    weight_dust: float = Field(default=1e-12, ge=0.0)
 
     def _split_csv(self, raw: str) -> list[str]:
         return [part.strip() for part in (raw or "").split(",") if part.strip()]

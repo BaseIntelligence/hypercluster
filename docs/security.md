@@ -23,7 +23,7 @@ Incomplete or invalid signatures are rejected. CLI helpers must not print tokens
 | Product knobs | `HYPER_*` | Separate from Base `CHALLENGE_*` prefix |
 | Provider SSH material | Operator-managed outside public payloads | Do not store plaintext secrets in git; GPU probe persists **fingerprint / key_ref only** (never PEM in SQLite or evidence JSON) |
 | GPU probe FakeSsh | Tests / explicit allow only | Production must not silently fake silicon (`HYPER_SSH_TRANSPORT=real` default path fails closed without keys) |
-| Commercial cloud QA secrets | Outside product process and outside default pytest | Never required for miners; never product Verda adapter |
+| Commercial cloud QA secrets | Outside product process and outside default pytest | Never required for miners; not injected into challenge process env by default |
 
 Product documentation and `.env.example` use placeholders only.
 
@@ -32,7 +32,7 @@ Product documentation and `.env.example` use placeholders only.
 - Challenge SQLite on `/data` is the only durable store for marketplace/jobs/scores.
 - Challenge never writes Base master Postgres and never executes validator `set_weights`.
 - Raw weights are finite non-negative floats; NaN/Inf/negative weights are invalid.
-- Outbound product policy denies commercial Verda control-plane hosts; optional maintainer tooling under `scripts/qa/` runs **outside** the challenge package import graph for product audits.
+- Outbound product policy restricts commercial control-plane hosts used by optional QA helpers; maintainer tooling under `scripts/qa/` runs outside the challenge package import graph.
 
 ## Integrity and scoring
 
@@ -55,7 +55,7 @@ Self-deal and spam soft penalties can damp aggregated hotkey mass without invent
 | No PEM storage | SQLite and public evidence expose at most key fingerprint / ref kind+name |
 | Redaction | Evidence stores redacted short raw; secrets scrubbed from messages |
 | FakeSsh boundary | Default gated CI uses FakeSsh fixtures; production refuses silent fake |
-| Live cloud ops | External `scripts/qa/*` only; product package remains free of Verda SDK/OAuth |
+| Live cloud ops | External `scripts/qa/*` only; product package has no embedded commercial broker SDK/OAuth client |
 
 See [GPU probe](gpu-probe.md) for the ordered fatal/advisory table.
 

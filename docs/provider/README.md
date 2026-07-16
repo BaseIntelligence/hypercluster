@@ -1,6 +1,6 @@
 # Provider guide (supply)
 
-Providers advertise compute capacity into Hypercluster’s home-grown marketplace. Capacity can be self-owned SSH fleets, lab clusters, or hardware obtained outside the product (commercial rentals remain **ops-owned**, never a product SDK dependency).
+Providers advertise compute capacity into Hypercluster’s home-grown marketplace. Capacity may be self-owned or obtained ops-side; miners only need the marketplace APIs (self fleets, lab clusters, or inventory offered by a provider hotkey).
 
 ## Prerequisites
 

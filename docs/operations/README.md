@@ -48,7 +48,7 @@ Container listens **8000** internally; compose maps host **3250**. SQLite /data 
 
 ## Configuration
 
-See `.env.example` for `CHALLENGE_*` and `HYPER_*` knobs. Prefer secret files for tokens. Never place commercial broker credentials in the challenge process environment for product isolation guarantees.
+See `.env.example` for `CHALLENGE_*` and `HYPER_*` knobs. Prefer secret files for tokens. Do not place third-party broker credentials in the challenge process env.
 
 ## Quality gate
 

@@ -59,7 +59,7 @@ flowchart TB
 | Component | Responsibility |
 | --- | --- |
 | **API layer** | Base `/health` `/ready` `/version`, public `/v1/*` routes, signed write auth, `get_weights` hook |
-| **Marketplace** | Providers, nodes, offers, leases, pods; hard price/lifetime guards; home-grown (not a cloud adapter) |
+| **Marketplace** | Providers, nodes, offers, leases, pods; hard price/lifetime guards; first-party marketplace |
 | **Jobs** | Admit → place → provision/bind → run → collect → score → teardown; CAS-style queue claims |
 | **Fabric** | FabricReport discovery, pack/spread placement, NCCL env matrix, multi-node launch contract, honesty injects in sim |
 | **GPU probe** | Non-TEE SSH allowlist inventory + open CUDA microbench; FakeSsh default in CI; evidence APIs/CLI; integrity hooks only |
@@ -109,7 +109,7 @@ Host proxy form under Base: `/challenges/hypercluster/...`. Relative paths above
 - Ordered fatal/advisory SSH checks (`nvidia-smi`, UUID uniqueness, open CUDA microbench, optional docker runtime).
 - **FakeSsh** is the default transport for gated CI; production refuses silent fake.
 - Private keys: **file/env `key_ref` only**; SQLite stores fingerprints/refs — never PEM.
-- Live commercial rent + host probe remains external maintainer tooling (`scripts/qa/*`); not a product cloud adapter.
+- Live commercial rent + host probe remain external maintainer tooling (`scripts/qa/*`).
 - Full table and security notes: [GPU probe](gpu-probe.md).
 
 ## Jobs and marketplace handoff
@@ -123,20 +123,20 @@ Score → weight snapshot → push to master
 Teardown lease policy on terminal or terminate
 ```
 
-## Local vs product paths
+## Default gated CI vs operator runtime
 
-| Path | Default CI | Product runtime |
+| Path | Default gated CI | Operator runtime |
 | --- | --- | --- |
 | Self inventory / SSH fleets | Simulated | Yes |
 | Multi-node IB/NCCL | **Local sim required** | Real fabrics when operators supply them |
 | GPU host probe | **FakeSsh fixture matrix** | RealSSH allowlist when operators supply hosts/keys |
 | TEE offline fixtures | Required | Enabled when proofs present |
 | Live TEE hardware | Optional skip | Optional (`HYPER_TEE_LIVE`) |
-| Commercial cloud rental | Forbidden in gated tests | Not a product dependency; optional external capacity behind a hotkey |
+| Commercial cloud rental | Forbidden in gated tests | Optional external capacity behind a hotkey; clients stay out of band |
 
 ## Out of scope (product)
 
-- First-party Verda / commercial broker SDK or OAuth client
+- First-party third-party cloud broker integration (optional future)
 - Challenge-side `set_weights` or chain UID mapping
 - Full R=2 multi-node re-execution as default honesty
 - Claiming InfiniBand encryption from GPU CC/TDX alone

@@ -1,6 +1,6 @@
 # Marketplace
 
-Hypercluster implements a **home-grown**, Lium-shaped marketplace entirely inside the challenge. Product code does not call commercial broker APIs. Capacity is whatever providers register (self fleets, lab clusters, or capacity a provider obtained out-of-band).
+Hypercluster implements a **home-grown**, Lium-shaped marketplace entirely inside the challenge. Capacity is whatever providers register (self fleets, lab clusters, or capacity a provider obtained out-of-band). Commercial broker clients, if any, stay outside the product path.
 
 ## Objects
 

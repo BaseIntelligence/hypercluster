@@ -23,7 +23,7 @@
 
 Hypercluster is a [Base Intelligence](https://github.com/BaseIntelligence/base) challenge service. Miners can **supply** GPU/CPU capacity (register nodes, list offers, host pods) and **demand** Modal-like multi-node jobs (browse offers, rent, submit work). The challenge owns marketplace lifecycle, topology-aware InfiniBand/NCCL planning (local simulator in default CI), optional dstack TEE offline verification, optional **non-TEE SSH GPU host probe** (FakeSsh in default CI), and a four-factor scoring engine that emits **raw hotkey weights** to Base master.
 
-Hypercluster scores marketplace honesty and execution quality. It is **not** a commercial cloud broker and **does not ship** a Verda (or other cloud) product adapter. You do **not** need a commercial GPU broker account to mine. Self-owned SSH fleets and inventory registered through the home-grown APIs are the product path. Multi-node fabric validation defaults to a deterministic local simulator; GPU probe gates use FakeSsh offline; live single-GPU rent + RealSSH probe are optional maintainer tooling under `scripts/qa/` outside the product package tree. Challenge never calls `set_weights`; formula stays `correctness × efficiency × fabric_gate × tee_bonus`.
+Hypercluster scores marketplace honesty and execution quality. Miners bring self-owned SSH fleets or other inventory and register it through the home-grown marketplace APIs. Capacity obtained out-of-band (including commercial rentals) can feed those same APIs; commercial cloud clients stay ops tooling and are not required to mine. Multi-node fabric validation defaults to a deterministic local simulator; GPU probe gates use FakeSsh offline; live single-GPU rent + RealSSH probe are optional maintainer helpers under `scripts/qa/`. Challenge never calls `set_weights`; formula stays `correctness × efficiency × fabric_gate × tee_bonus`.
 
 Trust model: **cryptographically-anchored trust-but-audit**. Signed miner/provider writes, digest-pinned jobs, fabric gates, optional TEE multipliers, integrity zeros on spoof paths. Multi-node InfiniBand is not an encrypted confidentiality fabric under GPU CC/TDX; TEE bolsters collocated honest compute, not wire secrecy across ranks.
 
@@ -119,13 +119,13 @@ Copy `.env.example` for `CHALLENGE_*` / `HYPER_*` knobs. Never commit tokens.
 
 ## Validation quick reference
 
-Default gates are local only (unit, integration, sim). They never auto-load commercial cloud credentials. GitHub Actions runs the same quality bar (lint, format, mypy, no-verda fence, pytest with coverage, Docker build/publish) on every push; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+Default gates are local only (unit, integration, sim). Gated tests do not require cloud credentials. GitHub Actions runs the same quality bar (lint, format, mypy, import-boundary audit, pytest with coverage, Docker build/publish) on every push; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ```bash
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
-uv run python scripts/check_no_verda.py
+uv run python scripts/check_no_verda.py   # import-boundary / dep audit
 uv run pytest -q -m "not live_verda and not integration" --cov=hypercluster --cov-fail-under=70
 uv run hypercluster sim doctor --offline
 uv run hypercluster sim run-scenario --name smoke --url http://127.0.0.1:3200
@@ -140,7 +140,7 @@ Canonical sim scenario order: `smoke` → `marketplace` → `nccl` → `tee-offl
 ```text
 src/hypercluster/     # FastAPI app, domain, fabric, attest, scoring, CLI, sim
 tests/                # unit, API, CLI, fabric, attest, docker (serial)
-scripts/qa/           # external maintainer-only live ops helpers (not product adapters)
+scripts/qa/           # maintainer-only live helpers (serial rent/probe; optional)
 docs/                 # product documentation
 docker/               # vendor wheel staging for image builds
 Dockerfile            # healthchecked challenge image on :8000

@@ -2,10 +2,10 @@
 
 Hypercluster can verify that a provider host has real GPU inventory and can perform a
 minimal open CUDA smoke **without TEE**. The pipeline is Lium-inspired (ordered fatal
-vs advisory SSH checks) and is **owned by the challenge**: no closed job provers,
-no SN51 collateral markets, and **no commercial-cloud product adapter**.
+vs advisory SSH checks) and is **owned by the challenge**: open CUDA / allowlist SSH;
+no closed job provers; no SN51 collateral markets.
 
-## Formula and chain fences
+## Formula and chain boundary
 
 ```text
 composite = correctness × efficiency × fabric_gate × tee_bonus
@@ -80,7 +80,7 @@ Exit codes: **0** passed, **2** failed checks, **3** transport/error, **1** usag
 | No PEM in API bodies or evidence JSON | Operator keys live on disk (`0600`) or env |
 | Allowlist SSH only | Unknown `command_id` abandoned; no free-form remote shell |
 | Redacted raw | Response/store redaction + output caps |
-| No Verda in product | Live cloud rent remains external `scripts/qa/*` only |
+| Live rent path | Optional maintainer scripts under `scripts/qa/` |
 
 ## Live maintainers path (optional)
 

@@ -4,8 +4,11 @@ M10 model slice only:
 - Durable ``points_ledger`` / optional ``points_balances`` on challenge SQLite.
 - Columns: hotkey, delta, reason, attempt_id/score_id, timestamps; unique earn
   per attempt_id for score_earn rows.
-- No SQL ``gpu_price_catalog``; offer ``price_per_hour`` create path unchanged.
+- Offer ``price_per_hour`` create path unchanged by the ledger itself.
 - Never set_weights; four-factor formula untouched (no earn side-effects here).
+
+M11 note: ``gpu_price_catalog`` / ``gpu_price_history`` may co-exist in the same
+SQLite after create_all (VAL-PRICE-001); ledger tests no longer forbid them.
 """
 
 from __future__ import annotations
@@ -97,8 +100,9 @@ async def test_points_tables_created_by_database_init(database: Database) -> Non
         )
     assert "points_ledger" in table_names
     assert "points_balances" in table_names
-    # Explicit: no SQL gpu_price_catalog this round (VAL-WGT-001 / VAL-WGT-020).
-    assert "gpu_price_catalog" not in table_names
+    # M10 originally forbade SQL price tables; M11 lands gpu_price_catalog
+    # (+ history) via the same create_all. points ledger is still independent
+    # (VAL-WGT-020 offer path). No legacy gpu_price_revisions table.
     assert "gpu_price_revisions" not in table_names
 
 
@@ -224,7 +228,7 @@ async def test_admin_adjust_rows_allow_null_attempt_id(db_session: AsyncSession)
 
 
 # ---------------------------------------------------------------------------
-# VAL-WGT-020: offer price path independent of price catalog
+# VAL-WGT-020: offer price path independent of price-catalog *seed*
 # ---------------------------------------------------------------------------
 
 
@@ -232,11 +236,17 @@ async def test_admin_adjust_rows_allow_null_attempt_id(db_session: AsyncSession)
 async def test_offer_model_keeps_price_per_hour_without_price_catalog(
     db_session: AsyncSession,
 ) -> None:
-    """VAL-WGT-020: offer rows store price_per_hour without gpu_price_catalog table."""
+    """VAL-WGT-020: offer rows store price_per_hour as free-form listing field.
 
-    # Safety: metadata must not register a GPU price catalog this round.
-    assert "gpu_price_catalog" not in Base.metadata.tables
+    M11 may register ``gpu_price_catalog`` in metadata (VAL-PRICE-001), but offer
+    create with an explicit ``price_per_hour`` must not depend on seed/content
+    of that catalog. Legacy ``gpu_price_revisions`` still must not exist.
+    """
+
     assert "gpu_price_revisions" not in Base.metadata.tables
+    # Real M11 tables may now exist; legacy revisions name remains forbidden.
+    assert "gpu_price_catalog" in Base.metadata.tables
+    assert "gpu_price_history" in Base.metadata.tables
 
     from hypercluster.db.models import Provider
 
@@ -277,7 +287,11 @@ async def test_offer_create_api_still_works_without_price_catalog(
     settings_factory,
     tmp_path,
 ) -> None:
-    """VAL-WGT-020 regression: signed offer create with price_per_hour succeeds."""
+    """VAL-WGT-020 regression: signed offer create with explicit price succeeds.
+
+    Catalog tables exist after create_all (M11), but empty catalog + explicit
+    price_per_hour still lists next to system hard max (enforce off by default).
+    """
 
     import json
 
@@ -341,14 +355,16 @@ async def test_offer_create_api_still_works_without_price_catalog(
             assert data["price_per_hour"] == pytest.approx(3.75)
             assert data["status"] == "listed"
 
-            # points tables present after boot
+            # points + M11 price tables present after boot
             db = app.state.database
             async with db.engine.connect() as conn:
                 names = await conn.run_sync(
                     lambda sync_conn: set(inspect(sync_conn).get_table_names())
                 )
             assert "points_ledger" in names
-            assert "gpu_price_catalog" not in names
+            assert "gpu_price_catalog" in names
+            assert "gpu_price_history" in names
+            assert "gpu_price_revisions" not in names
 
 
 @pytest.mark.asyncio
@@ -361,6 +377,10 @@ async def test_package_exports_points_models() -> None:
     assert hasattr(m, "PointsBalance")
     assert m.PointsLedger.__tablename__ == "points_ledger"
     assert m.PointsBalance.__tablename__ == "points_balances"
+    assert hasattr(m, "GpuPriceCatalog")
+    assert hasattr(m, "GpuPriceHistory")
+    assert m.GpuPriceCatalog.__tablename__ == "gpu_price_catalog"
+    assert m.GpuPriceHistory.__tablename__ == "gpu_price_history"
 
 
 @pytest.mark.asyncio

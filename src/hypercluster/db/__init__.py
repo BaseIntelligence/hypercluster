@@ -1,14 +1,16 @@
 """Database package exports.
 
 Importing models ensures SQLAlchemy metadata registers marketplace tables so
-`Database.init()` → `Base.metadata.create_all` creates providers/nodes/nonces
-and M10 points_ledger / points_balances.
+`Database.init()` → `Base.metadata.create_all` creates providers/nodes/nonces,
+M10 points_ledger / points_balances, and M11 gpu_price_catalog / history.
 """
 
 from __future__ import annotations
 
 from hypercluster.db.database import Base, Database
 from hypercluster.db.models import (
+    GpuPriceCatalog,
+    GpuPriceHistory,
     Node,
     PointsBalance,
     PointsLedger,
@@ -19,6 +21,8 @@ from hypercluster.db.models import (
 __all__ = [
     "Base",
     "Database",
+    "GpuPriceCatalog",
+    "GpuPriceHistory",
     "Node",
     "PointsBalance",
     "PointsLedger",

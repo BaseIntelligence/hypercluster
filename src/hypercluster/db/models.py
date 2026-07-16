@@ -9,7 +9,16 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from hypercluster.db.database import Base
@@ -867,12 +876,142 @@ class FabricReportRow(Base):
         }
 
 
+class GpuPriceCatalog(Base):
+    """Current active USD reference price per GPU model (M11; VAL-PRICE-001/002).
+
+    One physical row per ``model_key`` (UNIQUE). Disable via ``active=0`` rather
+    than delete so history stays auditable. Challenge-local reference only —
+    never on-chain, never a fifth scoring factor, never product Verda.
+
+    Product pricing ladders must not be hardcoded outside the seed path
+    (``seed_default_catalog`` / source=seed); this model is durable SQL only.
+    """
+
+    __tablename__ = "gpu_price_catalog"
+    __table_args__ = (
+        UniqueConstraint("model_key", name="uq_gpu_price_catalog_model_key"),
+        Index("ix_gpu_price_catalog_family_active", "family", "active"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    model_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    family: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    price_per_hour: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    # 1 = public/active; 0 = disabled (admin only; no public/default resolve)
+    active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    # admin|seed|cli|import
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="admin")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_offer_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_offer_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    def to_dict(self, *, include_admin: bool = False) -> dict[str, Any]:
+        """Serialize for public/admin API. Admin may include notes + multipliers."""
+
+        body: dict[str, Any] = {
+            "id": self.id,
+            "model_key": self.model_key,
+            "family": self.family,
+            "display_name": self.display_name,
+            "price_per_hour": float(self.price_per_hour),
+            "currency": self.currency,
+            "active": bool(self.active),
+            "effective_from": isoformat_utc(self.effective_from),
+            "source": self.source,
+            "created_at": isoformat_utc(self.created_at),
+            "updated_at": isoformat_utc(self.updated_at),
+        }
+        if include_admin:
+            body["notes"] = self.notes
+            body["max_offer_multiplier"] = (
+                None
+                if self.max_offer_multiplier is None
+                else float(self.max_offer_multiplier)
+            )
+            body["min_offer_multiplier"] = (
+                None
+                if self.min_offer_multiplier is None
+                else float(self.min_offer_multiplier)
+            )
+        return body
+
+
+class GpuPriceHistory(Base):
+    """Append-only audit log for GPU price catalog changes (M11; VAL-PRICE-001).
+
+    Every catalog upsert/disable must append a row. No UPDATE of history rows.
+    Multiple rows per ``model_key`` are expected (not unique on key).
+    """
+
+    __tablename__ = "gpu_price_history"
+    __table_args__ = (
+        Index("ix_gpu_price_history_model_key_created", "model_key", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    model_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    family: Mapped[str] = mapped_column(String(64), nullable=False)
+    price_per_hour: Mapped[float] = mapped_column(Float, nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    # Catalog ``active`` after this change (1/0).
+    active_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    # cli|admin|seed or known subject (hotkey/token label)
+    changed_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="admin")
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        index=True,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "model_key": self.model_key,
+            "family": self.family,
+            "price_per_hour": float(self.price_per_hour),
+            "currency": self.currency,
+            "active_after": int(self.active_after),
+            "changed_by": self.changed_by,
+            "reason": self.reason,
+            "source": self.source,
+            "effective_from": isoformat_utc(self.effective_from),
+            "created_at": isoformat_utc(self.created_at),
+        }
+
+
 class PointsLedger(Base):
     """Challenge-local points earn/adjust ledger (M10; VAL-WGT-001).
 
     Durable rows under SQLite ``/data``. Points are **not** on-chain tokens;
-    they feed later sum-normalized incentives. No SQL ``gpu_price_catalog``:
-    offer ``price_per_hour`` stays a listing field only.
+    they feed later sum-normalized incentives. Offer ``price_per_hour`` stays a
+    listing field; M11 SQL ``gpu_price_catalog`` is a separate reference table
+    (optional points ``price_weight`` does not live on this ledger schema).
 
     ``score_earn`` rows use ``attempt_id`` as the idempotency key (unique when
     present). Admin/adjust rows may leave ``attempt_id`` null.
@@ -1143,6 +1282,8 @@ class GpuHostEvidenceRow(Base):
 __all__ = [
     "FabricReportRow",
     "GpuHostEvidenceRow",
+    "GpuPriceCatalog",
+    "GpuPriceHistory",
     "Job",
     "JobAttempt",
     "JobFabricReport",

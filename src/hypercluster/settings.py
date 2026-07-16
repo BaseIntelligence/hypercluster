@@ -175,6 +175,11 @@ class HyperSettings(BaseSettings):
     # passed GpuHostEvidence; default false so pure sim remains green.
     sim_gpu_probe_fail: bool = False
     require_gpu_evidence_for_live: bool = False
+    # M10 points ledger earn (VAL-WGT-002/003/004). Downstream of four-factor only.
+    # Env: HYPER_POINTS_ENABLED, HYPER_POINTS_SCALE.
+    # points_delta = composite * scale when composite > 0; else no positive mint.
+    points_enabled: bool = True
+    points_scale: float = Field(default=1.0, ge=0.0)
 
     def _split_csv(self, raw: str) -> list[str]:
         return [part.strip() for part in (raw or "").split(",") if part.strip()]

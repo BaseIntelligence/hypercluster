@@ -354,6 +354,21 @@ async def persist_score_for_attempt(
         row.hotkey = hotkey
         row.role = role
     await session.flush()
+
+    # M10: earn challenge-local points from positive composite (VAL-WGT-002/003/004).
+    # Idempotent per attempt_id; integrity zero / composite ≤ 0 never mint positive.
+    # Failures here must not break score seal (ledger is best-effort after Score).
+    try:
+        from hypercluster.domain.points import earn_from_score
+
+        await earn_from_score(session, row, hyper=hyper)
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "points earn_from_score failed for attempt_id=%s",
+            attempt_id,
+        )
     return row
 
 

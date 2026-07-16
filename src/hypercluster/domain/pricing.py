@@ -1,4 +1,4 @@
-"""GPU price catalog domain service (M11; VAL-PRICE-010..013).
+"""GPU price catalog domain service (M11; VAL-PRICE-010..013, 020..021).
 
 SQL-backed reference catalog for USD GPU ``price_per_hour`` values:
 
@@ -9,6 +9,9 @@ SQL-backed reference catalog for USD GPU ``price_per_hour`` values:
 - ``resolve_catalog_price`` — public resolve: exact active model_key prefer,
   else active family via ``normalize_gpu_model``, ordered by
   ``effective_from DESC, model_key ASC``
+- ``seed_default_catalog`` — bootstrap ≥10 common USD model_keys (source=seed);
+  ``only_if_empty=True`` never clobbers admin rows (VAL-PRICE-020/021)
+- ``maybe_seed_prices_on_boot`` — optional ``HYPER_PRICE_SEED_ON_BOOT`` path
 
 Validation (writes):
 - finite ``price_per_hour`` > 0 only
@@ -16,21 +19,134 @@ Validation (writes):
 - inactive rows excluded from public resolve / active-only lists
 
 Never mutates four-factor scoring; never product Verda; never set_weights.
+Pricing ladders live only in the seed path — not in FakeSsh / probe tables.
 """
 
 from __future__ import annotations
 
 import math
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hypercluster.db.models import GpuPriceCatalog, GpuPriceHistory, utc_now
 from hypercluster.probe.model_table import normalize_gpu_model
 
+if TYPE_CHECKING:
+    from hypercluster.db.database import Database
+
 ALLOWED_CURRENCY = "USD"
+
+# Design ladder: rough public mid-market USD per GPU-hour (operators reprice).
+# VAL-PRICE-020 requires ≥10 distinct model_keys spanning H100/A100/RTX/….
+# Source of truth: research/m11-gpu-price-catalog-design.md §9.
+DEFAULT_SEED_LADDER: tuple[dict[str, Any], ...] = (
+    {
+        "model_key": "H100_80GB",
+        "family": "h100",
+        "display_name": "NVIDIA H100 80GB",
+        "price_per_hour": 2.49,
+    },
+    {
+        "model_key": "H200_141GB",
+        "family": "h200",
+        "display_name": "NVIDIA H200",
+        "price_per_hour": 3.49,
+    },
+    {
+        "model_key": "A100_80GB",
+        "family": "a100",
+        "display_name": "NVIDIA A100 80GB",
+        "price_per_hour": 1.89,
+    },
+    {
+        "model_key": "A100_40GB",
+        "family": "a100",
+        "display_name": "NVIDIA A100 40GB",
+        "price_per_hour": 1.29,
+    },
+    {
+        "model_key": "A10_24GB",
+        "family": "a10",
+        "display_name": "NVIDIA A10",
+        "price_per_hour": 0.45,
+    },
+    {
+        "model_key": "A40_48GB",
+        "family": "a40",
+        "display_name": "NVIDIA A40",
+        "price_per_hour": 0.85,
+    },
+    {
+        "model_key": "A6000_48GB",
+        "family": "a6000",
+        "display_name": "NVIDIA RTX A6000",
+        "price_per_hour": 0.75,
+    },
+    {
+        "model_key": "L40S_48GB",
+        "family": "l40s",
+        "display_name": "NVIDIA L40S",
+        "price_per_hour": 1.15,
+    },
+    {
+        "model_key": "L40_48GB",
+        "family": "l40",
+        "display_name": "NVIDIA L40",
+        "price_per_hour": 0.95,
+    },
+    {
+        "model_key": "L4_24GB",
+        "family": "l4",
+        "display_name": "NVIDIA L4",
+        "price_per_hour": 0.40,
+    },
+    {
+        "model_key": "V100_32GB",
+        "family": "v100",
+        "display_name": "NVIDIA V100 32GB",
+        "price_per_hour": 0.55,
+    },
+    {
+        "model_key": "V100_16GB",
+        "family": "v100",
+        "display_name": "NVIDIA V100 16GB",
+        "price_per_hour": 0.39,
+    },
+    {
+        "model_key": "T4_16GB",
+        "family": "t4",
+        "display_name": "NVIDIA T4",
+        "price_per_hour": 0.22,
+    },
+    {
+        "model_key": "RTX_4090",
+        "family": "rtx4090",
+        "display_name": "GeForce RTX 4090",
+        "price_per_hour": 0.45,
+    },
+    {
+        "model_key": "RTX_3090",
+        "family": "rtx3090",
+        "display_name": "GeForce RTX 3090",
+        "price_per_hour": 0.28,
+    },
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SeedResult:
+    """Outcome of :func:`seed_default_catalog`."""
+
+    inserted: int
+    updated: int
+    skipped: bool
+    total: int
+    source: str
+
 
 
 class PricingError(Exception):
@@ -461,15 +577,139 @@ def history_row_to_public(row: GpuPriceHistory) -> dict[str, Any]:
     return row.to_dict()
 
 
+async def seed_default_catalog(
+    session: AsyncSession,
+    *,
+    only_if_empty: bool = True,
+    source: str = "seed",
+    ladder: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
+    changed_by: str | None = None,
+    reason: str | None = "default seed ladder",
+) -> SeedResult:
+    """Bootstrap common GPU USD reference prices (VAL-PRICE-020 / 021).
+
+    When ``only_if_empty=True`` (default): if *any* catalog row already exists
+    the call is a **no-op** — never clobber admin/CLI reprices. When empty,
+    insert the design ladder (≥10 model_keys: H100/A100/RTX/…).
+
+    When ``only_if_empty=False``: upsert every ladder row (operators / tests).
+
+    All written rows use ``source`` (default ``seed``), USD currency, active=1,
+    finite ``price_per_hour > 0``. History is append-only via upsert path.
+    """
+
+    src = str(source or "seed").strip()[:32] or "seed"
+    rows = tuple(ladder) if ladder is not None else DEFAULT_SEED_LADDER
+    if not rows:
+        return SeedResult(inserted=0, updated=0, skipped=True, total=0, source=src)
+
+    existing_count = int(
+        (
+            await session.execute(select(func.count()).select_from(GpuPriceCatalog))
+        ).scalar_one()
+        or 0
+    )
+
+    if only_if_empty and existing_count > 0:
+        return SeedResult(
+            inserted=0,
+            updated=0,
+            skipped=True,
+            total=existing_count,
+            source=src,
+        )
+
+    actor = str(changed_by or src or "seed")[:128]
+    why = reason if reason is not None else "default seed ladder"
+    inserted = 0
+    updated = 0
+
+    for entry in rows:
+        model_key = str(entry.get("model_key") or "").strip()
+        if not model_key:
+            continue
+        price = entry.get("price_per_hour")
+        family = entry.get("family")
+        display_name = entry.get("display_name")
+        prior = await get_catalog_price(session, model_key, active_only=False)
+        await upsert_catalog_price(
+            session,
+            model_key=model_key,
+            price_per_hour=price,
+            family=str(family) if family is not None else None,
+            display_name=str(display_name) if display_name is not None else None,
+            currency=ALLOWED_CURRENCY,
+            active=True,
+            source=src,
+            notes=entry.get("notes") if isinstance(entry.get("notes"), str) else None,
+            changed_by=actor,
+            reason=why,
+        )
+        if prior is None:
+            inserted += 1
+        else:
+            updated += 1
+
+    total = int(
+        (
+            await session.execute(select(func.count()).select_from(GpuPriceCatalog))
+        ).scalar_one()
+        or 0
+    )
+    return SeedResult(
+        inserted=inserted,
+        updated=updated,
+        skipped=False,
+        total=total,
+        source=src,
+    )
+
+
+async def maybe_seed_prices_on_boot(
+    database: Database,
+    *,
+    price_seed_on_boot: bool = False,
+    only_if_empty: bool = True,
+    source: str = "seed",
+) -> SeedResult | None:
+    """Optional boot hook for ``HYPER_PRICE_SEED_ON_BOOT`` (default off).
+
+    When ``price_seed_on_boot`` is false, returns ``None`` without touching SQL.
+    When true, opens a session and runs
+    ``seed_default_catalog(only_if_empty=True, source=seed)`` then commits.
+    Never clobbers admin rows while ``only_if_empty`` remains true.
+    """
+
+    if not price_seed_on_boot:
+        return None
+    async with database.session() as session:
+        result = await seed_default_catalog(
+            session,
+            only_if_empty=only_if_empty,
+            source=source,
+            changed_by="seed",
+            reason="boot seed (HYPER_PRICE_SEED_ON_BOOT)",
+        )
+        if not result.skipped and (result.inserted > 0 or result.updated > 0):
+            await session.commit()
+        else:
+            await session.rollback()
+        return result
+
+
 __all__ = [
     "ALLOWED_CURRENCY",
+    "DEFAULT_SEED_LADDER",
     "PricingError",
+    "SeedResult",
     "catalog_row_to_public",
     "disable_catalog_price",
     "get_catalog_price",
     "history_row_to_public",
     "list_catalog_prices",
     "list_price_history",
+    "maybe_seed_prices_on_boot",
     "resolve_catalog_price",
+    "seed_default_catalog",
     "upsert_catalog_price",
 ]

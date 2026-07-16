@@ -155,6 +155,23 @@ def create_app(
     app_settings = settings if settings is not None else get_settings()
     product = hyper_settings if hyper_settings is not None else get_hyper_settings()
     database = Database(app_settings.database_url)
+
+    # M11 optional catalog seed after create_all (HYPER_PRICE_SEED_ON_BOOT).
+    # only_if_empty=True never clobbers admin rows (VAL-PRICE-020/021).
+    if bool(getattr(product, "price_seed_on_boot", False)):
+
+        async def _price_seed_hook(db: Database) -> None:
+            from hypercluster.domain.pricing import maybe_seed_prices_on_boot
+
+            await maybe_seed_prices_on_boot(
+                db,
+                price_seed_on_boot=True,
+                only_if_empty=True,
+                source="seed",
+            )
+
+        database.add_post_init_hook(_price_seed_hook)
+
     drain_state = _make_drain_state()
 
     tasks: list[BackgroundTaskFactory]

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+PostInitHook = Callable[["Database"], Awaitable[Any]]
+
 
 class Base(DeclarativeBase):
     """Base class for challenge-owned SQLAlchemy models."""
@@ -25,10 +28,17 @@ class Base(DeclarativeBase):
 class Database:
     """Async SQLAlchemy database wrapper with init/close lifespan hooks."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        post_init_hooks: list[PostInitHook] | None = None,
+    ) -> None:
         self.database_url = database_url
         self._initialized = False
         self._closed = False
+        # Optional hooks after create_all (e.g. M11 price catalog seed-on-boot).
+        self._post_init_hooks: list[PostInitHook] = list(post_init_hooks or [])
         connect_args: dict[str, object] = {}
         if database_url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
@@ -46,6 +56,11 @@ class Database:
             autoflush=False,
         )
 
+    def add_post_init_hook(self, hook: PostInitHook) -> None:
+        """Register a coroutine run after successful ``init()`` create_all."""
+
+        self._post_init_hooks.append(hook)
+
     @property
     def initialized(self) -> bool:
         return self._initialized
@@ -55,7 +70,13 @@ class Database:
         return self._closed
 
     async def init(self) -> None:
-        """Create challenge-owned tables and mark initialized."""
+        """Create challenge-owned tables and mark initialized.
+
+        Runs any registered post-init hooks after ``create_all`` (e.g. optional
+        ``HYPER_PRICE_SEED_ON_BOOT`` catalog seed). Hook failures are logged
+        and must not prevent the database from marking initialized when tables
+        already exist; individual hooks own their safety (seed is only_if_empty).
+        """
 
         # Ensure model modules register metadata before create_all.
         import hypercluster.db.models  # noqa: F401
@@ -66,6 +87,16 @@ class Database:
             await connection.run_sync(Base.metadata.create_all)
         self._initialized = True
         self._closed = False
+        for hook in list(self._post_init_hooks):
+            try:
+                await hook(self)
+            except Exception:  # noqa: BLE001 — never block app boot on seed
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "database post_init hook failed: %r",
+                    hook,
+                )
 
     async def close(self) -> None:
         """Dispose database connections."""

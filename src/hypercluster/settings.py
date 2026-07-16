@@ -190,6 +190,21 @@ class HyperSettings(BaseSettings):
     # Optional keep only top-k largest mass keys before re-normalize; None/0 = off.
     weight_top_k: int | None = Field(default=None, ge=0)
     weight_dust: float = Field(default=1e-12, ge=0.0)
+    # M11 GPU price catalog (VAL-PRICE-020/021 + later enforce/price_weight).
+    # Env: HYPER_PRICE_SEED_ON_BOOT (default false — never clobber admin tables).
+    # When true, seed_default_catalog(only_if_empty=True, source=seed) runs after
+    # database.init so empty catalogs get the ≥10-key USD design ladder once.
+    price_seed_on_boot: bool = False
+    # Catalog band / enforce knobs land with offer-default feature; defaults ready.
+    # Env: HYPER_PRICE_ENFORCE=off|soft|hard, HYPER_PRICE_MAX/MIN_MULTIPLIER.
+    price_enforce: str = Field(default="off")  # off|soft|hard
+    price_max_multiplier: float = Field(default=3.0, gt=0.0)
+    price_min_multiplier: float = Field(default=0.25, gt=0.0)
+    # Optional points earn weighting (default off; VAL-PRICE-060 family later).
+    price_weight_in_earn: bool = False
+    price_weight_floor: float = Field(default=0.85, gt=0.0)
+    price_weight_ceil: float = Field(default=1.15, gt=0.0)
+    price_weight_missing: float = Field(default=1.0, gt=0.0)
 
     def _split_csv(self, raw: str) -> list[str]:
         return [part.strip() for part in (raw or "").split(",") if part.strip()]

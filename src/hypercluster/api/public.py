@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from hypercluster.api.auth import DbSession, RequireMiner
+from hypercluster.api.prices import router as prices_router
 from hypercluster.domain.fabric_reports import (
     FabricReportError,
     fabric_scan_node,
@@ -96,6 +97,8 @@ from hypercluster.domain.providers import (
 )
 
 router = APIRouter()
+# M11 GPU price catalog public + admin routes (VAL-PRICE-030..033).
+router.include_router(prices_router)
 
 
 class ProviderRegisterRequest(BaseModel):

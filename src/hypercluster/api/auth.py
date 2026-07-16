@@ -262,12 +262,95 @@ async def optional_hotkey(
     return x_hotkey
 
 
+def resolve_request_shared_token(request: Request) -> str:
+    """Load challenge shared token from app.state.settings (env or file)."""
+
+    settings = getattr(request.app.state, "settings", None)
+    shared_token = ""
+    if settings is not None:
+        shared_token = getattr(settings, "shared_token", None) or ""
+        if not shared_token:
+            token_file = getattr(settings, "shared_token_file", None)
+            if token_file:
+                try:
+                    from pathlib import Path
+
+                    shared_token = Path(token_file).read_text(encoding="utf-8").strip()
+                except OSError:
+                    shared_token = ""
+    if not shared_token:
+        # Fall back to Base SDK loader if available on state
+        try:
+            from base.challenge_sdk.auth import load_shared_token
+
+            if settings is not None:
+                loaded = load_shared_token(settings)
+                if loaded:
+                    shared_token = loaded
+        except Exception:  # noqa: BLE001 — load helper optional at runtime
+            pass
+    return str(shared_token or "")
+
+
+async def require_challenge_shared_token(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+    x_challenge_token: Annotated[
+        str | None, Header(alias="X-Challenge-Token")
+    ] = None,
+) -> str:
+    """Fail-closed ops auth for admin surfaces (M11 price catalog; VAL-PRICE-032).
+
+    Accepts either:
+    - ``Authorization: Bearer <CHALLENGE_SHARED_TOKEN>``
+    - ``X-Challenge-Token: <CHALLENGE_SHARED_TOKEN>``
+
+    Missing/wrong token → HTTP 401 with code ``price_catalog_unauthorized``.
+    Never echoes the expected secret in the error body.
+    """
+
+    expected = resolve_request_shared_token(request)
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "price_catalog_unauthorized",
+                "message": "challenge shared token is not configured",
+            },
+        )
+
+    presented: str | None = None
+    if x_challenge_token is not None and str(x_challenge_token).strip():
+        presented = str(x_challenge_token).strip()
+    elif authorization is not None and str(authorization).strip():
+        raw = str(authorization).strip()
+        if raw.lower().startswith("bearer "):
+            presented = raw[7:].strip()
+        else:
+            presented = raw
+
+    if not presented or not hmac.compare_digest(presented, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "price_catalog_unauthorized",
+                "message": "challenge shared token required",
+            },
+        )
+    return "admin"
+
+
+# Type alias for admin-gated handlers
+RequireSharedToken = Annotated[str, Depends(require_challenge_shared_token)]
+
+
 __all__ = [
     "DbSession",
     "HOTKEY_HEADER",
     "MinerIdentity",
     "NONCE_HEADER",
     "RequireMiner",
+    "RequireSharedToken",
     "SIGNATURE_HEADER",
     "TIMESTAMP_HEADER",
     "authenticate_miner",
@@ -275,7 +358,9 @@ __all__ = [
     "canonical_message",
     "get_db_session",
     "optional_hotkey",
+    "require_challenge_shared_token",
     "require_hotkey_header_only",
+    "resolve_request_shared_token",
     "sign_dev",
     "verify_dev_signature",
     "verify_substrate_signature",

@@ -50,6 +50,7 @@ REQUIRED_TOP_LEVEL = (
     "attest",
     "score",
     "weights",
+    "points",
     "sim",
 )
 

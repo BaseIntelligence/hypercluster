@@ -1317,6 +1317,74 @@ async def weight_preview(
     return await weight_preview_payload(database=database, hyper=hyper)
 
 
+@public_route(tags=["points"])
+@router.get("/v1/points")
+async def points_list(
+    session: DbSession,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Enumerate hotkey points balances (VAL-WGT-006).
+
+    Empty DB → HTTP 200 ``items=[]`` / ``count=0`` (never 5xx, no ambient dump).
+    Challenge-local reputation only — never tokens, keys, or set_weights.
+    """
+
+    from hypercluster.domain.points import balance_row_to_public, list_points_balances
+
+    rows = await list_points_balances(session, limit=limit)
+    items = [balance_row_to_public(row) for row in rows]
+    return {
+        "items": items,
+        "count": len(items),
+        "empty": len(items) == 0,
+    }
+
+
+@public_route(tags=["points"])
+@router.get("/v1/points/{hotkey}/history")
+async def points_history(
+    hotkey: str,
+    session: DbSession,
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Ordered ledger history for a hotkey (VAL-WGT-007).
+
+    Newest first. Includes attempt_id/score_id for score_earn rows. Never-seen
+    hotkey → empty ``items`` (empty-safe), never 500 for vacancy.
+    """
+
+    from hypercluster.domain.points import ledger_row_to_public, list_points_history
+
+    rows = await list_points_history(session, hotkey, limit=limit)
+    items = [ledger_row_to_public(row) for row in rows]
+    return {
+        "hotkey": hotkey,
+        "items": items,
+        "count": len(items),
+        "empty": len(items) == 0,
+    }
+
+
+@public_route(tags=["points"])
+@router.get("/v1/points/{hotkey}")
+async def points_balance(
+    hotkey: str,
+    session: DbSession,
+) -> dict[str, Any]:
+    """Current points balance for a hotkey (VAL-WGT-005).
+
+    Never-seen → ``balance: 0.0`` (finite ≥ 0), never 404-for-all / never 500.
+    """
+
+    from hypercluster.domain.points import get_points_balance
+
+    bal = await get_points_balance(session, hotkey)
+    return {
+        "hotkey": hotkey,
+        "balance": float(bal),
+    }
+
+
 @public_route(tags=["sim"])
 @router.post("/v1/sim/idle-reclaim", status_code=status.HTTP_200_OK)
 async def sim_idle_reclaim(
@@ -1421,6 +1489,9 @@ __all__ = [
     "leaderboard",
     "scores_for_hotkey",
     "weight_preview",
+    "points_list",
+    "points_balance",
+    "points_history",
     "leases_get",
     "leases_list",
     "leases_terminate",

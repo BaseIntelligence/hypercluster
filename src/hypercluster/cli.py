@@ -1,8 +1,8 @@
 """Hypercluster Typer CLI — packaging core + domain subcommands.
 
-Groups (VAL-CLI-001):
+Groups (VAL-CLI-001 / VAL-WGT-021):
   serve, version, health --url, db, marketplace, nodes, jobs, fabric, attest,
-  score, weights, sim {seed, run-scenario, doctor}
+  score, weights, points, sim {seed, run-scenario, doctor}
 """
 
 from __future__ import annotations
@@ -69,6 +69,11 @@ weights_app = typer.Typer(
     no_args_is_help=True,
     help="Raw weight preview and push (VAL-SCORE-020). Never set_weights.",
 )
+points_app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="Challenge-local points balance/list/history (VAL-WGT-021). Never set_weights.",
+)
 # Root groups (VAL-CLI-001 / packaging)
 register_serve(app)
 app.add_typer(db_app, name="db")
@@ -80,6 +85,7 @@ app.add_typer(fabric_app, name="fabric")
 app.add_typer(attest_app, name="attest")
 app.add_typer(score_app, name="score")
 app.add_typer(weights_app, name="weights")
+app.add_typer(points_app, name="points")
 fabric_app.add_typer(fabric_report_app, name="report")
 register_nodes_mutate(nodes_app)
 
@@ -1087,6 +1093,78 @@ def weights_push_cmd(
         # soft ok for idempotent already-acked is included in acknowledged
         if body.get("push_status") not in {"acked", "sim"}:
             raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@points_app.command("balance")
+def points_balance_cmd(
+    hotkey: str = typer.Option(..., "--hotkey", help="Miner hotkey (ss58 or sim id)"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+) -> None:
+    """Show points balance for one hotkey (VAL-WGT-021). Never prints tokens."""
+
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(f"{base}/v1/points/{hotkey}", timeout=10.0)
+    except httpx.HTTPError as exc:
+        typer.echo(f"points balance failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(response.text)
+    if response.status_code != 200:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@points_app.command("list")
+def points_list_cmd(
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    limit: int = typer.Option(100, "--limit", help="Max balance rows"),
+) -> None:
+    """Enumerate points balances (VAL-WGT-021). Empty DB safe. Never prints tokens."""
+
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(
+            f"{base}/v1/points",
+            params={"limit": limit},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"points list failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(response.text)
+    if response.status_code != 200:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@points_app.command("history")
+def points_history_cmd(
+    hotkey: str = typer.Option(..., "--hotkey", help="Miner hotkey (ss58 or sim id)"),
+    url: str | None = _url_option(),
+    host: str | None = typer.Option(None, help="API host when --url omitted"),
+    port: int | None = typer.Option(None, help="API port when --url omitted"),
+    limit: int = typer.Option(100, "--limit", help="Max ledger rows"),
+) -> None:
+    """Optional ledger history for a hotkey (VAL-WGT-021 plus). Never prints tokens."""
+
+    base = _resolve_base_url(url, host, port)
+    try:
+        response = httpx.get(
+            f"{base}/v1/points/{hotkey}/history",
+            params={"limit": limit},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"points history failed for {base}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(response.text)
+    if response.status_code != 200:
+        raise typer.Exit(code=1)
     raise typer.Exit(code=0)
 
 

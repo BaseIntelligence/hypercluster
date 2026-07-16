@@ -67,6 +67,56 @@ def compute_score_earn_delta(
     return float(delta)
 
 
+def _safe_balance(value: Any) -> float:
+    """Coerce balance-like value to finite float (else 0.0)."""
+
+    try:
+        bal = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(bal):
+        return 0.0
+    return bal
+
+
+def ledger_row_to_public(row: PointsLedger) -> dict[str, Any]:
+    """Public forensic shape for a ledger row (no secrets).
+
+    Includes attempt_id / score_id when present for earn forensics (VAL-WGT-007).
+    """
+
+    public = row.to_dict()
+    public["delta"] = float(row.delta) if math.isfinite(float(row.delta)) else 0.0
+    public["balance_after"] = _safe_balance(row.balance_after)
+    # Never leak raw env/token keys if a misconfigured details blob carried them.
+    details = public.get("details")
+    if isinstance(details, dict):
+        scrubbed = {
+            k: v
+            for k, v in details.items()
+            if str(k).lower()
+            not in {
+                "token",
+                "shared_token",
+                "password",
+                "private_key",
+                "api_key",
+                "authorization",
+                "secret",
+            }
+        }
+        public["details"] = scrubbed
+    return public
+
+
+def balance_row_to_public(row: PointsBalance) -> dict[str, Any]:
+    """Public balance rollup shape for list/balance endpoints."""
+
+    body = row.to_dict()
+    body["balance"] = _safe_balance(row.balance)
+    return body
+
+
 async def get_points_balance(session: AsyncSession, hotkey: str) -> float:
     """Current denormalized balance for hotkey (0.0 if never seen)."""
 
@@ -76,13 +126,63 @@ async def get_points_balance(session: AsyncSession, hotkey: str) -> float:
     row = result.scalar_one_or_none()
     if row is None:
         return 0.0
-    try:
-        bal = float(row.balance)
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(bal):
-        return 0.0
-    return bal
+    return _safe_balance(row.balance)
+
+
+async def get_balance_row(
+    session: AsyncSession,
+    hotkey: str,
+) -> PointsBalance | None:
+    """Return points_balances row for hotkey, if any."""
+
+    result = await session.execute(
+        select(PointsBalance).where(PointsBalance.hotkey == hotkey)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_points_balances(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+) -> list[PointsBalance]:
+    """Enumerate balance rollups ordered by balance desc (VAL-WGT-006).
+
+    Empty DB → ``[]`` (never crash). Only rows that exist are returned;
+    never-seen hotkeys are omitted from list (use balance endpoint for 0).
+    """
+
+    lim = max(1, min(int(limit), 1000))
+    result = await session.execute(
+        select(PointsBalance)
+        .order_by(PointsBalance.balance.desc(), PointsBalance.hotkey.asc())
+        .limit(lim)
+    )
+    return list(result.scalars().all())
+
+
+async def list_points_history(
+    session: AsyncSession,
+    hotkey: str,
+    *,
+    limit: int = 100,
+) -> list[PointsLedger]:
+    """Ordered ledger history for a hotkey, newest first (VAL-WGT-007).
+
+    Never-seen hotkey → empty list (empty-safe).
+    """
+
+    lim = max(1, min(int(limit), 1000))
+    hk = str(hotkey or "").strip()
+    if not hk:
+        return []
+    result = await session.execute(
+        select(PointsLedger)
+        .where(PointsLedger.hotkey == hk)
+        .order_by(PointsLedger.created_at.desc())
+        .limit(lim)
+    )
+    return list(result.scalars().all())
 
 
 async def get_ledger_for_attempt(
@@ -227,9 +327,14 @@ async def earn_from_score_id(
 __all__ = [
     "REASON_ADMIN_ADJUST",
     "REASON_SCORE_EARN",
+    "balance_row_to_public",
     "compute_score_earn_delta",
     "earn_from_score",
     "earn_from_score_id",
+    "get_balance_row",
     "get_ledger_for_attempt",
     "get_points_balance",
+    "ledger_row_to_public",
+    "list_points_balances",
+    "list_points_history",
 ]
